@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transit-3D</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a12; color: #cdd; font-family: monospace; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    #hud {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+      background: rgba(0,0,0,0.7); padding: 10px 18px; border-radius: 10px;
+      border: 1px solid #334;
+    }
+    button {
+      background: #1a2a3a; color: #cdd; border: 1px solid #446;
+      padding: 6px 14px; border-radius: 5px; cursor: pointer; font-family: monospace;
+      font-size: 13px;
+    }
+    button:hover { background: #2a3a5a; }
+    select {
+      background: #1a2a3a; color: #cdd; border: 1px solid #446;
+      padding: 6px 8px; border-radius: 5px; font-family: monospace; font-size: 13px;
+    }
+    #time-display { min-width: 90px; text-align: center; font-size: 13px; color: #88aadd; }
+
+    #legend {
+      position: fixed; top: 16px; left: 16px;
+      background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
+      border: 1px solid #334; font-size: 12px; line-height: 1.8;
+    }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+
+    #prob-display {
+      position: fixed; top: 16px; right: 16px;
+      background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
+      border: 1px solid #334; font-size: 12px; line-height: 2;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="legend">
+    <div><span class="dot" style="background:#4488ff"></span>L42 (tronc)</div>
+    <div><span class="dot" style="background:#ff8844"></span>L17 (filet)</div>
+    <div><span class="dot" style="background:#44cc44"></span>L33 (cible)</div>
+    <div style="margin-top:6px; color:#888; font-size:11px">Axe vertical = temps</div>
+  </div>
+
+  <div id="prob-display">
+    <div>P(attraper L33) : <span id="prob-l33">—</span></div>
+    <div>P(attraper L17) : <span id="prob-l17">—</span></div>
+  </div>
+
+  <div id="hud">
+    <select id="scenario-select">
+      <option value="1">Cas 1 — nominal</option>
+      <option value="2">Cas 2 — repli</option>
+    </select>
+    <button id="btn-rewind">⏮</button>
+    <button id="btn-play">▶ Play</button>
+    <button id="btn-pause">⏸ Pause</button>
+    <select id="speed-select">
+      <option value="5">×5</option>
+      <option value="20" selected>×20</option>
+      <option value="60">×60</option>
+      <option value="120">×120</option>
+    </select>
+    <span id="time-display">T = 0 s</span>
+  </div>
+
+  <script type="module">
+    import { init, renderFrame } from './js/renderer.js';
+    import { createPlayer, loadScenario } from './js/player.js';
+
+    const canvas = document.getElementById('canvas');
+    let player = null;
+    let routes = null;
+    let lastTs = null;
+
+    async function load(scenarioId) {
+      const data = await loadScenario(`./data/scenario${scenarioId}.json`);
+      routes = data.routes;
+      init(canvas, { routes });
+      player = createPlayer(data.frames);
+      player.setSpeed(Number(document.getElementById('speed-select').value));
+      update();
+    }
+
+    function update() {
+      if (!player || !routes) return;
+      renderFrame(player.frame, routes);
+      document.getElementById('time-display').textContent =
+        `T = ${Math.round(player.simTime)} s`;
+      const transfers = player.frame.transfers ?? [];
+      const l33 = transfers.find(t => t.to_vehicle_id === 'L33-util');
+      const l17 = transfers.find(t => t.to_vehicle_id === 'L17-util');
+      document.getElementById('prob-l33').textContent =
+        l33 ? (l33.probability * 100).toFixed(1) + ' %' : '—';
+      document.getElementById('prob-l17').textContent =
+        l17 ? (l17.probability * 100).toFixed(1) + ' %' : '—';
+    }
+
+    function tick(ts) {
+      requestAnimationFrame(tick);
+      if (lastTs !== null && player?.isPlaying) {
+        if (player.tick((ts - lastTs) / 1000)) update();
+      }
+      lastTs = ts;
+    }
+
+    document.getElementById('btn-play').onclick    = () => player?.play();
+    document.getElementById('btn-pause').onclick   = () => player?.pause();
+    document.getElementById('btn-rewind').onclick  = () => { player?.seekTo(0); update(); };
+    document.getElementById('speed-select').onchange = e =>
+      player?.setSpeed(Number(e.target.value));
+    document.getElementById('scenario-select').onchange = e => load(e.target.value);
+
+    await load(1);
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

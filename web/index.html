@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transit-3D</title>
+  <style>
+    body { margin: 0; background: #111; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <script type="module">
+    import { init, renderFrame } from './js/renderer.js';
+    import { createPlayer } from './js/player.js';
+    init(document.getElementById('canvas'), {});
+  </script>
+</body>
+</html>

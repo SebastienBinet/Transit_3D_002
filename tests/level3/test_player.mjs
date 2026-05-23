@@ -42,3 +42,52 @@ test('seekTo avant le début reste à la première frame', () => {
     p.seekTo(-1);
     assert.equal(p.frame.sim_time, 0);
 });
+
+test('tick ne joue pas si en pause', () => {
+    const p = createPlayer(frames);
+    p.tick(100);
+    assert.equal(p.frame.sim_time, 0);
+});
+
+test('tick avance d\'une frame quand simDelta dépasse l\'intervalle', () => {
+    const p = createPlayer(frames);
+    p.play();
+    p.setSpeed(1);
+    const changed = p.tick(6);
+    assert.equal(changed, true);
+    assert.equal(p.frame.sim_time, 5);
+});
+
+test('tick ne change pas de frame si simDelta insuffisant', () => {
+    const p = createPlayer(frames);
+    p.play();
+    p.setSpeed(1);
+    const changed = p.tick(3);
+    assert.equal(changed, false);
+    assert.equal(p.frame.sim_time, 0);
+});
+
+test('tick respecte le multiplicateur de vitesse', () => {
+    const p = createPlayer(frames);
+    p.play();
+    p.setSpeed(2);
+    p.tick(3);  // wall=3s × speed=2 → simDelta=6 → frame sim_time=5
+    assert.equal(p.frame.sim_time, 5);
+});
+
+test('pause arrête l\'avance', () => {
+    const p = createPlayer(frames);
+    p.play();
+    p.pause();
+    p.tick(100);
+    assert.equal(p.frame.sim_time, 0);
+});
+
+test('isPlaying reflète l\'état play/pause', () => {
+    const p = createPlayer(frames);
+    assert.equal(p.isPlaying, false);
+    p.play();
+    assert.equal(p.isPlaying, true);
+    p.pause();
+    assert.equal(p.isPlaying, false);
+});

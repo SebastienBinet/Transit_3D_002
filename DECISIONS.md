@@ -1,108 +1,172 @@
-# Décisions d'architecture — Transit-3D
+# Transit-3D — Registre des décisions
 
-Ce document capture les décisions structurantes du projet, avec leurs motivations et les alternatives écartées. À lire avant toute décision d'architecture ou modification du code.
-
----
-
-## 1. Visualisation espace-temps 3D
-
-**Décision** : plan horizontal = géographie (lat/lon), axe vertical = temps (t=0 en bas, futur vers le haut).
-
-**Pourquoi** : les cartes de transit plates compriment le temps dans des annotations textuelles (horaires, couleurs). Elles cachent les conflits de correspondance et l'incertitude de propagation. Passer en 3D rend visible ce qui est invisible en 2D : deux lignes qui se croisent dans l'espace peuvent ne jamais se croiser dans le temps — aucune correspondance possible. Une carte plate ne peut pas montrer ça directement.
-
-**Alternative écartée** : animation temporelle 2D (avancer un curseur de temps). Trop linéaire : l'utilisateur voit un instant à la fois, ne perçoit pas la structure globale des options.
+Document de référence consolidant les décisions prises en phase de discussion.
+Lu au besoin (pas chargé automatiquement à chaque session). Le CLAUDE.md racine
+en est la distillation maigre.
+Langue: rédigé en français (projet solo francophone). Peut être traduit si le projet
+devient collaboratif.
 
 ---
 
-## 2. Architecture en trois couches
+## 1. Cadre du projet
 
-**Décision** : simulateur Python → couche données/player (Node-testable) → renderer Three.js.
-
-**Pourquoi** :
-- Le simulateur est complexe (stochastique, multilignes, horaires réels) : Python est le bon outil pour ça.
-- Le renderer est complexe (3D, WebGL, caméra) : Three.js est le bon outil pour ça.
-- Entre les deux, la logique de données (interpolation, player, contrat de frames) n'a besoin ni de Python ni de Three.js. La garder pure JS/Node permet de la tester sans navigateur, sans GPU, rapidement en CI.
-
-**Frontière swappable** : seul `web/js/renderer.js` importe Three.js. Si on veut changer de moteur 3D demain, on ne touche qu'à ce fichier.
+Nature: projet solo, hobby pour l'instant; possiblement commercial ou bénévolat plus tard.
+Rôles: le porteur est architecte / product owner / gestionnaire des priorités. Il
+n'écrit ni ne révise de code. Claude écrit 100 % du code et des tests.
+Budget: ~10 h vers un prototype visuel avec données simulées; ~20 h vers un prototype
+utilisant quelques données ouvertes.
 
 ---
 
-## 3. Contrat de données simulateur → visualizer
+## 2. Concept
 
-**Décision** : les frames sont des états complets et auto-suffisants, avec timestamp. Le simulateur est l'autorité du temps. Le visualizer ne fait que dessiner ; il n'extrapole jamais au-delà des frames reçues.
-
-**Pourquoi** : si le visualizer peut interpoler librement ou extrapoler, il devient une deuxième source de vérité sur les positions. Les bugs deviennent impossibles à localiser : est-ce le simulateur ou le visualizer qui se trompe ? En tranchant clairement — le simulateur calcule, le visualizer affiche — on peut tester chaque couche indépendamment.
-
-**Conséquence** : si une frame manque ou est en retard, le visualizer reste sur la dernière frame connue. Jamais de "deviner" où est le véhicule.
-
-**Alternative écartée** : envoyer seulement les deltas (positions différentielles). Plus compact, mais casse l'auto-suffisance des frames : une frame corrompue ou manquée corrompt tout ce qui suit.
+Diagramme espace-temps 3D. Plan horizontal = géographie (lat/lon). Axe vertical = temps,
+t=0 en bas (maintenant), vers le haut = futur.
+Trajectoire d'un bus: rapide = quasi-horizontale; lent = pentu; arrêté = verticale.
+Proposition de valeur: faire émerger les options de transfert, les probabilités de succès
+et les dynamiques near-catch / near-miss que les cartes plates (Google Maps) cachent.
 
 ---
 
-## 4. Modèle d'incertitude : percentiles p10/p50/p90
+## 3. Persona
 
-**Décision** : l'incertitude de position est représentée par trois percentiles (p10, p50, p90), tranchés par temps, alignés par échantillon. Position exprimée en `progress_m` (mètres parcourus le long du tracé).
-
-**Pourquoi** :
-- `progress_m` est une coordonnée 1D le long d'un tracé connu. Ça évite de stocker des lat/lon brutes pour chaque percentile — la géométrie du tracé est déjà connue, seule la progression sur ce tracé est incertaine.
-- Les percentiles par temps (et non par position) permettent de lire : "à t=10min, 80 % des scénarios ont le bus entre p10 et p90". C'est une question naturelle pour un voyageur.
-- "Alignés par échantillon" : p10, p50, p90 sont calculés sur le même ensemble de simulations à chaque pas de temps, pas sur des distributions indépendantes. Ça garantit p10 ≤ p50 ≤ p90 et des enveloppes cohérentes.
-
-**Alternative écartée** : Monte Carlo avec densité volumétrique (nuage de points 3D). Trop coûteux à rendre, difficile à lire, et inutilement précis pour une décision de transfert.
-
-**Alternative écartée** : une seule trajectoire (p50 seulement). Cache l'incertitude, ce qui est précisément ce qu'on veut visualiser.
+Grand public montréalais qui réalise que les outils actuels ne font pas surface aux options
+ni aux probabilités de succès.
 
 ---
 
-## 5. Invariants de trajectoire
+## 4. Rendu
 
-**Décision** : dans toute frame, pour toute trajectoire :
-- Le temps est strictement croissant.
-- `progress_m` est monotone non-décroissante (un bus ne recule pas sur son tracé).
-- p10 ≤ p50 ≤ p90 à chaque pas de temps.
-- À t=0, p10 = p50 = p90 (pas d'incertitude à l'instant initial connu).
-
-**Pourquoi** : ces invariants sont des vérités physiques et probabilistes. Les valider en entrée du visualizer permet de détecter immédiatement une corruption de données ou un bug simulateur, plutôt que de propager silencieusement des valeurs aberrantes dans le rendu.
+Web + Three.js. Visualizer derrière une interface swappable (renderer.js).
+Interface du renderer: `init(canvas, config)` / `renderFrame(frame)` / `dispose()`.
+Seul `renderer.js` importe Three.js. Le player, l'interpolation et la logique de données
+restent Three.js-free (testables headless sous Node).
 
 ---
 
-## 6. Coordonnées : lat/lon unique transformation
+## 5. Contrat de données (simulateur → visualizer)
 
-**Décision** : la géométrie des lignes est stockée en lat/lon. Une seule transformation lat/lon → plan 2D, dans le visualizer, à la dernière étape.
-
-**Pourquoi** : travailler en lat/lon dans tout le pipeline permet de réutiliser les données géographiques brutes (GTFS, OpenStreetMap) sans pré-projection. La projection (Mercator, équirectangulaire, etc.) est un détail de rendu, pas une décision de données. Si on change de projection, on ne touche qu'au visualizer.
-
-**Conséquence** : le simulateur et la couche données ne connaissent pas les coordonnées écran. Ils raisonnent toujours en `progress_m` (1D sur tracé) et en lat/lon pour la géométrie de référence.
-
----
-
-## 7. Déterminisme du simulateur
-
-**Décision** : le RNG du simulateur est toujours seedé explicitement.
-
-**Pourquoi** : un simulateur stochastique non-seedé produit des résultats différents à chaque exécution. Les tests deviennent non-déterministes, les bugs impossibles à reproduire. Le seed est un paramètre de configuration, pas une constante magique — il peut être changé pour tester différents scénarios, mais jamais omis.
-
----
-
-## 8. Stratégie de tests
-
-**Décision** :
-- Niveau 1 : tests unitaires Python (simulateur).
-- Niveau 2 : validation schéma/contrat des frames (interface simulateur→visualizer).
-- Niveau 3 : logique JS headless sous Node (player, interpolation).
-- Niveau 4 : smoke test navigateur (hors CI, manuel).
-- Niveau 5 : tests de récit (scénarios end-to-end sans navigateur).
-
-**Pourquoi** : les tests qui requièrent un navigateur ou un GPU sont lents, fragiles sur CI, et impossibles dans les environnements sans affichage. En gardant les couches simulateur et données testables sans navigateur, on peut avoir une CI rapide et fiable. Le navigateur n'est vérifié que manuellement ou en smoke test.
-
-**Principe** : tout test important doit tourner sous `pytest` ou `node` purs. Si un test requiert un navigateur, c'est un signal que la logique testée est peut-être mal placée.
+Frames = état complet auto-suffisant + timestamp (pas de flux d'événements).
+Le simulateur calcule les trajectoires; le visualizer ne fait que dessiner.
+Le simulateur est l'autorité du temps; le visualizer contrôle l'affichage (player:
+play/pause/scrub/vitesse) et n'extrapole jamais au-delà des frames reçues.
+Pré-calculé pour le prototype: le simulateur génère toutes les frames d'avance → JSON;
+le visualizer les joue comme une vidéo. Streaming reporté au système live; même format de frame
+supporte les deux.
+Cadence: 1 frame / 5 s de sim-time (ajustable).
+Incertitude: percentiles explicites p10/p50/p90, tranchés par temps (chaque échantillon
+temporel porte p10/p50/p90 alignés). Pas de rendu volumétrique de densité (pas d'échantillons
+Monte Carlo). Représentation-neutre: le visualizer peut dessiner lignes, bandes, disques étirés, etc.
+Position en `progress_m` (mètres le long du tracé); le visualizer convertit en lat/lon via
+la géométrie de la ligne.
+Invariants de trajectoire: temps strictement croissant; progress monotone non-décroissant
+(arrêté = progress constant = ligne verticale); p10 ≤ p50 ≤ p90; percentiles égaux à t=0 (prototype).
+Échantillonnage adaptatif: densifier aux changements de vitesse (arrêts, accélérations).
+Les tournants sont gérés côté visualizer par interpolation sur la géométrie de route, PAS par
+densification des données.
+Vitesse moyenne par segment (optionnel): info réelle, permet au renderer de styler la
+congestion sans l'inférer.
+Probabilité de transfert: scalaire par transfert, calculé en interne par le simulateur
+(séparé des percentiles).
+Staleness (plus de frames reçues): le visualizer fige sur le sim_time de la dernière frame,
+l'affiche honnêtement; indicateur "âge des données" séparé optionnel. (Pertinent au système live,
+pas au prototype.)
 
 ---
 
-## 9. Langue de travail
+## 6. Système de coordonnées
 
-**Décision** : le français est la langue de travail (documentation, commit messages, commentaires).
+Géométrie des lignes stockée en lat/lon (fictives mais plausibles pour la région de Montréal,
+pour le prototype).
+Une seule transformation de coordonnées (lat/lon → plan écran) vit dans le visualizer, à la
+dernière étape. Raison: garder toutes les données du pipeline en unités natives de la source
+(cohérent avec les futures données ouvertes), maximiser la débogabilité contre l'open data, et
+isoler les bogues de rendu des bogues de données.
 
-**Pourquoi** : le porteur du projet est francophone. Garder une seule langue dans toute la documentation évite les ambiguïtés de traduction sur les termes métier (correspondance, tracé, progression, etc.).
+---
 
-**Exception** : les identifiants de code (variables, fonctions, noms de fichiers) peuvent être en anglais si c'est la convention naturelle de l'écosystème (Python, JS). Le mélange dans le code est acceptable ; le mélange dans la documentation ne l'est pas.
+## 7. Fond de carte
+
+Prototype: carte fictive/synthétique (plan stylisé), créée avec les trajets. Couche séparée
+et swappable. Vraie carte de Montréal reportée au système live.
+
+---
+
+## 8. Scénario de démo
+
+3 lignes (L42 tronc, L17, L33), 5 arrêts chacune. Grande distance Origine→P1.
+Pour chaque ligne, 3 passages montrés: précédent, utile, suivant (9 bus au total).
+Fréquences provisoires: L33 ≈ 20 min, L42/L17 ≈ 15 min (à tuner).
+Transferts à des arrêts différents: P1 (→L17), P3 (→L33).
+Deux cas, partageant des prédictions initiales identiques (95 % d'attraper L33):
+
+**Cas 1**: rester sur L42 jusqu'à P3, transférer à L33. L42 normal → attrape L33.
+Total 20-30 min. (Manqué → prochain L33 +20 min → 40-50 min.)
+
+**Cas 2**: mêmes prédictions initiales, mais L42 se réalise lent (~5e percentile). La
+probabilité d'attraper L33 chute; avant P1 c'est trop risqué. Repli à P1 vers L17 (fiable).
+Total 25-35 min, plafonne le risque.
+
+Seule la vitesse de L42 varie entre les cas; L33/L17 tenus nominaux/à l'heure. Le transfert
+L17 à P1 est fiable (filet de sécurité).
+Seuil de décision (P sous laquelle "trop risqué") fixé au tune-up.
+Deux fichiers de scénario (scenario1.json, scenario2.json) partageant l'ouverture.
+Horizon de prédiction ≈ 30 min (couvre le trajet complet).
+Simulation: lecture normale et accélérée. Caméra: autopilot (orbite + scrub temporel scripté) et
+manuelle.
+
+---
+
+## 9. Critère de succès du prototype (~10 h)
+
+Sur la page GitHub Pages, l'utilisateur voit une représentation 3D d'une zone simulée (3 lignes,
+5 arrêts chacune) avec axe temps vertical (t=0 en bas). Le scénario à deux cas est visualisable:
+Cas 1 (le plan tient) et Cas 2 (repli adaptatif). En lecture accélérée, l'utilisateur observe les
+enveloppes d'incertitude se resserrer à mesure que le temps avance, et le point de décision (avant
+P1) où le risque devient lisible et justifie le repli. Deux modes caméra: autopilot et manuel.
+
+(Affine la formulation initiale "trois trajets distincts" en le scénario à deux cas avec transferts
+à des arrêts différents — voir §8.)
+Hors scope du prototype: données réelles; authentification; backend persistant; mobile; autres
+moyens de locomotion; météo/amis/activités; saisie de destination (origine/destination en dur).
+
+---
+
+## 10. Stack technique & dépôt
+
+Dépôt: transit-3d, public, licence AGPL-3.0.
+Hébergement: GitHub Pages, déploiement auto depuis `web/` via GitHub Action au push sur main.
+Environnement de dev: Claude Code on the web (connecté à GitHub).
+Simulateur: Python (modèles Pydantic = source de vérité du schéma de frame).
+Visualizer: JS + Three.js.
+Déterminisme: le RNG du simulateur est toujours seedé.
+
+---
+
+## 11. Tests
+
+Niveaux: 1 (unitaires Python), 2 (validation du contrat/schéma), 3 (logique JS, headless/Node),
+5 (tests de récit/domaine). Tous headless, exécutables par Claude.
+Niveau 4 (navigateur): smoke test seulement pour le prototype; régression visuelle reportée
+jusqu'à stabilisation des visuels.
+CI dès le départ: GitHub Action roule les tests à chaque push.
+
+---
+
+## 12. Pratiques de travail
+
+Ne rien assumer; vérifier. Ne pas cacher la confusion. Mettre en évidence les compromis.
+Code minimal qui résout le problème énoncé; pas de fonctionnalités spéculatives.
+En modifiant du code, ne changer que le nécessaire; corriger seulement les erreurs nouvellement
+introduites.
+Avant d'écrire/modifier du code, définir le critère de succès et boucler jusqu'à ce qu'il soit rempli.
+
+---
+
+## 13. Mémoire & contexte
+
+Logs: `discussions/raw/` (verbatim, non chargé auto), `discussions/AAAA-MM-JJ_*.md` (résumés
+structurés), `DECISIONS.md` (ce fichier).
+Pas de skills Claude Code custom au départ: hiérarchie CLAUDE.md + sous-agents au besoin.
+Pas de Claude Design à l'étape prototype (à reconsidérer pour le polissage UI / produit réel).
+CLAUDE.md racine maigre (chargé chaque session); le détail/pourquoi vit ici.

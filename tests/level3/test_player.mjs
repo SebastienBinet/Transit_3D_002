@@ -91,3 +91,14 @@ test('isPlaying reflète l\'état play/pause', () => {
     p.pause();
     assert.equal(p.isPlaying, false);
 });
+
+test('tick accumule le temps entre appels successifs', () => {
+    const p = createPlayer(frames);
+    p.play();
+    p.setSpeed(1);
+    // Deux ticks de 3 s chacun → simDelta cumulé = 6 s > intervalle de 5 s
+    p.tick(3);
+    const changed = p.tick(3);
+    assert.equal(changed, true);
+    assert.equal(p.frame.sim_time, 5);
+});

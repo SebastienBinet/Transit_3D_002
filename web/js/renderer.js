@@ -305,8 +305,9 @@ export function renderFrame(frame, routes) {
             if (style.bold) {
                 const geo2 = new THREE.BufferGeometry().setFromPoints(p50pts);
                 const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.6, transparent: true });
-                scene.add(new THREE.Line(geo2, mat2));
-                vehicleObjects.push(new THREE.Line(geo2, mat2));
+                const line2 = new THREE.Line(geo2, mat2);
+                scene.add(line2);
+                vehicleObjects.push(line2);
             }
         }
 

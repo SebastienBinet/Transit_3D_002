@@ -20,6 +20,7 @@ let latCenter, lonCenter, lonM;
 let vehicleObjects = [];
 let busMarker = null;
 let nowPlane;
+let checkerTexture = null;
 
 function worldPos(lat, lon, simTime) {
     return new THREE.Vector3(
@@ -32,12 +33,22 @@ function worldPos(lat, lon, simTime) {
 function clearVehicles() {
     for (const obj of vehicleObjects) {
         scene.remove(obj);
-        obj.geometry?.dispose();
-        obj.material?.dispose();
-        if (obj.isGroup) obj.children.forEach(c => { c.geometry?.dispose(); c.material?.dispose(); });
+        obj.traverse(child => {
+            child.geometry?.dispose();
+            // Ne pas disposer la texture damier partagée
+            if (child.material) {
+                if (child.material.map && child.material.map !== checkerTexture)
+                    child.material.map.dispose();
+                child.material.dispose();
+            }
+        });
     }
     vehicleObjects = [];
-    if (busMarker) { scene.remove(busMarker); busMarker = null; }
+    if (busMarker) {
+        scene.remove(busMarker);
+        busMarker.traverse(c => { c.geometry?.dispose(); c.material?.dispose(); });
+        busMarker = null;
+    }
 }
 
 // Forme de bus stylisée (carrosserie + toit)
@@ -57,6 +68,65 @@ function makeBusMarker() {
     const haloMat = new THREE.MeshBasicMaterial({ color: 0xffff88, transparent: true, opacity: 0.08 });
     group.add(new THREE.Mesh(haloGeo, haloMat));
     return group;
+}
+
+// Texture damier (créée une seule fois)
+function getCheckerTexture() {
+    if (checkerTexture) return checkerTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 4; x++) {
+            ctx.fillStyle = (x + y) % 2 === 0 ? '#111' : '#fff';
+            ctx.fillRect(x * 16, y * 16, 16, 16);
+        }
+    }
+    checkerTexture = new THREE.CanvasTexture(canvas);
+    return checkerTexture;
+}
+
+// Drapeau damier de course (pôle + tissu) ancré à la position donnée
+function makeFinishFlag(position) {
+    const group = new THREE.Group();
+    // Pôle
+    const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(10, 10, 450, 6),
+        new THREE.MeshLambertMaterial({ color: 0xdddddd }),
+    );
+    pole.position.y = 225;
+    group.add(pole);
+    // Tissu damier
+    const flag = new THREE.Mesh(
+        new THREE.PlaneGeometry(220, 140),
+        new THREE.MeshBasicMaterial({ map: getCheckerTexture(), side: THREE.DoubleSide }),
+    );
+    flag.position.set(110, 450, 0);   // accroché au sommet du pôle, s'étend à droite
+    flag.rotation.y = Math.PI / 6;    // léger angle pour la visibilité
+    group.add(flag);
+    group.position.copy(position);
+    return group;
+}
+
+// Longueur totale d'un tracé polylinéaire (en mètres)
+function shapeLen(shape) {
+    const lm = LAT_M * Math.cos(shape[0].lat * Math.PI / 180);
+    let len = 0;
+    for (let i = 1; i < shape.length; i++) {
+        const dy = (shape[i].lat - shape[i - 1].lat) * LAT_M;
+        const dx = (shape[i].lon - shape[i - 1].lon) * lm;
+        len += Math.sqrt(dy * dy + dx * dx);
+    }
+    return len;
+}
+
+// Heure d'arrivée estimée (p50) à la fin du tracé d'un véhicule
+function estimateArrival(vehicle, routeLen) {
+    const nearEnd = routeLen * 0.97;
+    for (const pt of vehicle.trajectory) {
+        if (pt.p50 >= nearEnd) return pt.t;
+    }
+    return vehicle.trajectory.at(-1)?.t ?? null;
 }
 
 // Marqueur d'arrêt-clé (transfert / destination)
@@ -284,9 +354,46 @@ export function renderFrame(frame, routes) {
         if (ll) {
             busMarker = makeBusMarker();
             busMarker.position.copy(worldPos(ll.lat, ll.lon, frame.sim_time));
-            // Orienter le bus dans la direction du tracé (axe X pour L42 est-ouest)
             busMarker.rotation.y = Math.PI / 2;
             scene.add(busMarker);
+        }
+    }
+
+    // Drapeaux d'arrivée : un au sol (géographie), un à l'heure estimée d'arrivée
+    const connectorLineId = suggestedConnector.startsWith('L33') ? 'L33' : 'L17';
+    const connectorRoute = routes.find(r => r.line_id === connectorLineId);
+    const connectorVehicle = frame.vehicles.find(v => v.vehicle_id === suggestedConnector);
+
+    if (connectorRoute && connectorVehicle) {
+        const destStop = connectorRoute.stops.at(-1);
+        const destLat = destStop.position.lat;
+        const destLon = destStop.position.lon;
+        const groundPos = worldPos(destLat, destLon, 0);
+
+        // Drapeau au sol
+        const flagGround = makeFinishFlag(groundPos);
+        scene.add(flagGround);
+        vehicleObjects.push(flagGround);
+
+        // Heure d'arrivée estimée → drapeau dans la dimension temps
+        const routeLength = shapeLen(connectorRoute.shape);
+        const tArrival = estimateArrival(connectorVehicle, routeLength);
+        if (tArrival != null) {
+            const arrivalPos = worldPos(destLat, destLon, tArrival);
+            const flagArrival = makeFinishFlag(arrivalPos);
+            scene.add(flagArrival);
+            vehicleObjects.push(flagArrival);
+
+            // Ligne verticale reliant les deux drapeaux
+            const connGeo = new THREE.BufferGeometry().setFromPoints([
+                groundPos.clone(), arrivalPos.clone(),
+            ]);
+            const connMat = new THREE.LineBasicMaterial({
+                color: 0xffffff, opacity: 0.25, transparent: true,
+            });
+            const connLine = new THREE.Line(connGeo, connMat);
+            scene.add(connLine);
+            vehicleObjects.push(connLine);
         }
     }
 }

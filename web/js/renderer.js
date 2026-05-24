@@ -21,6 +21,8 @@ let vehicleObjects = [];
 let busMarker = null;
 let nowPlane;
 let checkerTexture = null;
+let pendingFrame = null;
+export let lastDrawMs = 0; // durée du dernier drawFrame, lisible depuis l'extérieur
 
 function worldPos(lat, lon, simTime) {
     return new THREE.Vector3(
@@ -255,12 +257,23 @@ export function init(canvas, config) {
 
     (function loop() {
         requestAnimationFrame(loop);
+        if (pendingFrame) {
+            const t0 = performance.now();
+            drawFrame(pendingFrame.frame, pendingFrame.routes);
+            pendingFrame = null;
+            lastDrawMs = performance.now() - t0;
+        }
         controls.update();
         webglRenderer.render(scene, camera);
     })();
 }
 
+// Léger : stocke la frame à dessiner ; drawFrame() sera appelée par loop()
 export function renderFrame(frame, routes) {
+    pendingFrame = { frame, routes };
+}
+
+function drawFrame(frame, routes) {
     clearVehicles();
 
     if (nowPlane) nowPlane.position.y = frame.sim_time * TIME_SCALE;
@@ -305,8 +318,9 @@ export function renderFrame(frame, routes) {
             if (style.bold) {
                 const geo2 = new THREE.BufferGeometry().setFromPoints(p50pts);
                 const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.6, transparent: true });
-                scene.add(new THREE.Line(geo2, mat2));
-                vehicleObjects.push(new THREE.Line(geo2, mat2));
+                const line2 = new THREE.Line(geo2, mat2);
+                scene.add(line2);
+                vehicleObjects.push(line2);
             }
         }
 

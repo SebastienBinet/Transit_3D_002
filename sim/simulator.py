@@ -165,14 +165,18 @@ def _passenger_state(cfg: dict, T: float) -> PassengerState:
 def _passenger_trajectory(cfg: dict) -> list[PassengerCheckpoint]:
     """Retourne les jalons clés du parcours espace-temps du passager."""
     connector_len = route_length(cfg["connector_line"])
-    p_end = min(_bus_progress(cfg["connector"], HORIZON), connector_len)
-    return [
+    T_arrive_dest = cfg["T_board"] + (connector_len - cfg["p_stop_connector"]) / cfg["connector"].speed_mps
+
+    result = [
         PassengerCheckpoint(t=0.0, vehicle_id="L42-util", progress_m=0.0),
         PassengerCheckpoint(t=cfg["T_arrive"], vehicle_id="L42-util", progress_m=cfg["p_stop_L42"]),
         PassengerCheckpoint(t=cfg["T_arrive"], vehicle_id=cfg["connector_id"], progress_m=cfg["p_stop_connector"]),
         PassengerCheckpoint(t=cfg["T_board"],  vehicle_id=cfg["connector_id"], progress_m=cfg["p_stop_connector"]),
-        PassengerCheckpoint(t=HORIZON,         vehicle_id=cfg["connector_id"], progress_m=p_end),
     ]
+    if T_arrive_dest < HORIZON:
+        result.append(PassengerCheckpoint(t=T_arrive_dest, vehicle_id=cfg["connector_id"], progress_m=connector_len))
+    result.append(PassengerCheckpoint(t=HORIZON, vehicle_id=cfg["connector_id"], progress_m=connector_len))
+    return result
 
 
 def _build_routes() -> list[RouteGeometry]:

@@ -51,3 +51,44 @@ def test_scenario1_probabilite_L33_reste_elevee():
     frame_300 = out.frames[60]
     prob = next(t.probability for t in frame_300.transfers if t.to_vehicle_id == "L33-util")
     assert prob >= 0.80, f"prob L33 à T=300 s cas 1 devrait rester élevée, reçu {prob}"
+
+
+@pytest.mark.parametrize("scenario_id", [1, 2])
+def test_chaque_frame_a_un_etat_passager(scenario_id):
+    out = simulate(scenario_id)
+    for frame in out.frames:
+        assert frame.passenger is not None
+        assert frame.passenger.state in ("onboard", "waiting", "transferred")
+        assert frame.passenger.progress_m >= 0.0
+
+
+@pytest.mark.parametrize("scenario_id", [1, 2])
+def test_trajectoire_passager_presente(scenario_id):
+    out = simulate(scenario_id)
+    assert len(out.passenger_trajectory) >= 4
+
+
+def test_scenario1_passager_transfere_sur_L33():
+    out = simulate(1)
+    # Frames après T=560 s (index 112 = 560/5)
+    late_frames = [f for f in out.frames if f.sim_time > 600]
+    for frame in late_frames[:5]:
+        assert frame.passenger.state == "transferred"
+        assert frame.passenger.vehicle_id == "L33-util"
+
+
+def test_scenario2_passager_transfere_sur_L17():
+    out = simulate(2)
+    # Frames après T=300 s (index 60)
+    late_frames = [f for f in out.frames if f.sim_time > 350]
+    for frame in late_frames[:5]:
+        assert frame.passenger.state == "transferred"
+        assert frame.passenger.vehicle_id == "L17-util"
+
+
+def test_passager_demarre_sur_L42():
+    out = simulate(1)
+    p0 = out.frames[0].passenger
+    assert p0.state == "onboard"
+    assert p0.vehicle_id == "L42-util"
+    assert p0.progress_m == 0.0

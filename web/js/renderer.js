@@ -22,6 +22,7 @@ let busMarker = null;
 let nowPlane;
 let checkerTexture = null;
 let pendingFrame = null;
+let passengerTrajectory = [];
 export let lastDrawMs = 0; // durée du dernier drawFrame, lisible depuis l'extérieur
 
 function worldPos(lat, lon, simTime) {
@@ -53,21 +54,22 @@ function clearVehicles() {
     }
 }
 
-// Forme de bus stylisée (carrosserie + toit)
-function makeBusMarker() {
+// Forme de bus stylisée (carrosserie + toit) ; couleur paramétrable
+function makeBusMarker(color = 0xffee44) {
     const group = new THREE.Group();
+    const emissive = new THREE.Color(color).multiplyScalar(0.4);
     const bodyGeo = new THREE.BoxGeometry(280, 90, 130);
-    const bodyMat = new THREE.MeshLambertMaterial({ color: 0xffee44, emissive: 0x997700 });
+    const bodyMat = new THREE.MeshLambertMaterial({ color, emissive });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     group.add(body);
     const roofGeo = new THREE.BoxGeometry(220, 45, 110);
-    const roofMat = new THREE.MeshLambertMaterial({ color: 0xffee44, emissive: 0x997700 });
+    const roofMat = new THREE.MeshLambertMaterial({ color, emissive });
     const roof = new THREE.Mesh(roofGeo, roofMat);
     roof.position.y = 67;
     group.add(roof);
     // Halo de sélection
     const haloGeo = new THREE.SphereGeometry(180, 16, 16);
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffff88, transparent: true, opacity: 0.08 });
+    const haloMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.10 });
     group.add(new THREE.Mesh(haloGeo, haloMat));
     return group;
 }
@@ -150,7 +152,8 @@ function makeStopMarker(pos, color, label) {
 }
 
 export function init(canvas, config) {
-    const { routes } = config;
+    const { routes, passengerTrajectory: pt = [] } = config;
+    passengerTrajectory = pt;
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));
@@ -360,13 +363,35 @@ function drawFrame(frame, routes) {
         }
     }
 
-    // Marqueur de position du passager (sur L42-util)
-    const L42util = frame.vehicles.find(v => v.vehicle_id === 'L42-util');
-    if (L42util?.trajectory.length) {
-        const pt0 = L42util.trajectory[0];  // position actuelle (p10=p50=p90)
-        const ll = progressToLatLon(pt0.p50, shapeByLine['L42']);
+    // Trajectoire espace-temps du passager (ligne cyan continue)
+    if (passengerTrajectory.length >= 2) {
+        const trajPts = passengerTrajectory.map(cp => {
+            const lineId = cp.vehicle_id.split('-')[0];
+            const shape = shapeByLine[lineId];
+            if (!shape) return null;
+            const ll = progressToLatLon(cp.progress_m, shape);
+            return ll ? worldPos(ll.lat, ll.lon, cp.t) : null;
+        }).filter(Boolean);
+        if (trajPts.length >= 2) {
+            const geo = new THREE.BufferGeometry().setFromPoints(trajPts);
+            const mat = new THREE.LineBasicMaterial({ color: 0x00ffcc, opacity: 0.85, transparent: true });
+            const line = new THREE.Line(geo, mat);
+            scene.add(line);
+            vehicleObjects.push(line);
+        }
+    }
+
+    // Marqueur du passager : couleur selon l'état (onboard/waiting=jaune, transferred=couleur de la ligne)
+    const passenger = frame.passenger;
+    if (passenger) {
+        const lineId = passenger.vehicle_id.split('-')[0];
+        const shape = shapeByLine[lineId];
+        const ll = shape ? progressToLatLon(passenger.progress_m, shape) : null;
         if (ll) {
-            busMarker = makeBusMarker();
+            const markerColor = passenger.state === 'transferred'
+                ? (LINE_COLORS[lineId] ?? 0xffee44)
+                : 0xffee44;
+            busMarker = makeBusMarker(markerColor);
             busMarker.position.copy(worldPos(ll.lat, ll.lon, frame.sim_time));
             busMarker.rotation.y = Math.PI / 2;
             scene.add(busMarker);

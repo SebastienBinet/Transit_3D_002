@@ -3,6 +3,7 @@ import math
 
 from sim.models import (
     Frame, VehicleState, PercentilePoint, TransferProbability,
+    PassengerState, PassengerCheckpoint,
     RouteGeometry, Stop, LatLon, SimulationOutput,
 )
 from sim.scenario import (
@@ -109,6 +110,71 @@ def _transfer_prob_L17(p_t: float, T: float, dep_time: float) -> float:
     return round(1.0 - _normal_cdf(z), 6)
 
 
+def _passenger_config(scenario_id: int, buses: list[BusSpec]) -> dict:
+    """Calcule les constantes du parcours passager pour un scénario."""
+    L42_util = next(b for b in buses if b.vehicle_id == "L42-util")
+    if scenario_id == 1:
+        connector_id = "L33-util"
+        stop_idx_L42 = 3           # P3 est le 4e arrêt de L42
+        stop_idx_connector = 2     # P3 est le 3e arrêt de L33
+        T_board = L33_P3_TIME
+    else:
+        connector_id = "L17-util"
+        stop_idx_L42 = 1           # P1 est le 2e arrêt de L42
+        stop_idx_connector = 2     # P1 est le 3e arrêt de L17
+        T_board = L17_P1_TIME
+
+    connector = next(b for b in buses if b.vehicle_id == connector_id)
+    connector_line = connector.line_id
+    p_stop_L42 = route_stop_progress("L42")[stop_idx_L42]
+    p_stop_connector = route_stop_progress(connector_line)[stop_idx_connector]
+    T_arrive = L42_util.departure_time + p_stop_L42 / L42_util.speed_mps
+
+    return dict(
+        L42_util=L42_util,
+        connector=connector,
+        connector_id=connector_id,
+        connector_line=connector_line,
+        p_stop_L42=p_stop_L42,
+        p_stop_connector=p_stop_connector,
+        T_arrive=T_arrive,
+        T_board=T_board,
+    )
+
+
+def _passenger_state(cfg: dict, T: float) -> PassengerState:
+    if T < cfg["T_arrive"]:
+        return PassengerState(
+            state="onboard",
+            vehicle_id="L42-util",
+            progress_m=_bus_progress(cfg["L42_util"], T),
+        )
+    if T < cfg["T_board"]:
+        return PassengerState(
+            state="waiting",
+            vehicle_id=cfg["connector_id"],
+            progress_m=cfg["p_stop_connector"],
+        )
+    return PassengerState(
+        state="transferred",
+        vehicle_id=cfg["connector_id"],
+        progress_m=_bus_progress(cfg["connector"], T),
+    )
+
+
+def _passenger_trajectory(cfg: dict) -> list[PassengerCheckpoint]:
+    """Retourne les jalons clés du parcours espace-temps du passager."""
+    connector_len = route_length(cfg["connector_line"])
+    p_end = min(_bus_progress(cfg["connector"], HORIZON), connector_len)
+    return [
+        PassengerCheckpoint(t=0.0, vehicle_id="L42-util", progress_m=0.0),
+        PassengerCheckpoint(t=cfg["T_arrive"], vehicle_id="L42-util", progress_m=cfg["p_stop_L42"]),
+        PassengerCheckpoint(t=cfg["T_arrive"], vehicle_id=cfg["connector_id"], progress_m=cfg["p_stop_connector"]),
+        PassengerCheckpoint(t=cfg["T_board"],  vehicle_id=cfg["connector_id"], progress_m=cfg["p_stop_connector"]),
+        PassengerCheckpoint(t=HORIZON,         vehicle_id=cfg["connector_id"], progress_m=p_end),
+    ]
+
+
 def _build_routes() -> list[RouteGeometry]:
     routes = []
     for line_id, stop_ids in LINE_STOPS.items():
@@ -133,6 +199,7 @@ def simulate(scenario_id: int) -> SimulationOutput:
     L42_speed = V_NOM if scenario_id == 1 else V_NOM * 0.6
     buses = build_scenario(L42_speed)
     L42_util = next(b for b in buses if b.vehicle_id == "L42-util")
+    cfg = _passenger_config(scenario_id, buses)
 
     frames: list[Frame] = []
     T = 0.0
@@ -153,7 +220,16 @@ def simulate(scenario_id: int) -> SimulationOutput:
                 probability=_transfer_prob_L17(p_L42, T, L42_util.departure_time),
             ),
         ]
-        frames.append(Frame(sim_time=T, vehicles=vehicles, transfers=transfers))
+        frames.append(Frame(
+            sim_time=T,
+            vehicles=vehicles,
+            transfers=transfers,
+            passenger=_passenger_state(cfg, T),
+        ))
         T = round(T + FRAME_INTERVAL, 6)
 
-    return SimulationOutput(routes=_build_routes(), frames=frames)
+    return SimulationOutput(
+        routes=_build_routes(),
+        frames=frames,
+        passenger_trajectory=_passenger_trajectory(cfg),
+    )

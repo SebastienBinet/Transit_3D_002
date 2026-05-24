@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from sim.models import PercentilePoint, VehicleState, TransferProbability
+from sim.models import PercentilePoint, VehicleState, TransferProbability, PassengerState
 
 
 def pt(t, p):
@@ -74,3 +74,24 @@ def test_transfer_probability_hors_intervalle():
         TransferProbability(
             from_vehicle_id="v1", to_vehicle_id="v2", stop_id="P1", probability=1.5
         )
+
+
+def test_passenger_state_onboard():
+    ps = PassengerState(state="onboard", vehicle_id="L42-util", progress_m=250.0)
+    assert ps.state == "onboard"
+    assert ps.progress_m == 250.0
+
+
+def test_passenger_state_waiting():
+    ps = PassengerState(state="waiting", vehicle_id="L33-util", progress_m=1200.0)
+    assert ps.state == "waiting"
+
+
+def test_passenger_state_transferred():
+    ps = PassengerState(state="transferred", vehicle_id="L33-util", progress_m=1500.0)
+    assert ps.state == "transferred"
+
+
+def test_passenger_state_invalide():
+    with pytest.raises(ValidationError):
+        PassengerState(state="flying", vehicle_id="L42-util", progress_m=0.0)

@@ -111,7 +111,7 @@
     async function load(scenarioId) {
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
       routes = data.routes;
-      init(canvas, { routes });
+      init(canvas, { routes, passengerTrajectory: data.passenger_trajectory ?? [] });
       player = createPlayer(data.frames);
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();

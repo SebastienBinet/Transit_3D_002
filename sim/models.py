@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
@@ -53,10 +54,23 @@ class TransferProbability(BaseModel):
         return self
 
 
+class PassengerState(BaseModel):
+    state: Literal["onboard", "waiting", "transferred"]
+    vehicle_id: str   # L42-util, L33-util ou L17-util
+    progress_m: float  # position le long du tracé du véhicule référencé
+
+
+class PassengerCheckpoint(BaseModel):
+    t: float
+    vehicle_id: str
+    progress_m: float
+
+
 class Frame(BaseModel):
     sim_time: float
     vehicles: list[VehicleState]
     transfers: list[TransferProbability] = []
+    passenger: PassengerState | None = None
 
 
 class LatLon(BaseModel):
@@ -79,3 +93,4 @@ class RouteGeometry(BaseModel):
 class SimulationOutput(BaseModel):
     routes: list[RouteGeometry]
     frames: list[Frame]
+    passenger_trajectory: list[PassengerCheckpoint] = []

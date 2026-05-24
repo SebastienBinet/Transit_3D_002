@@ -8,12 +8,17 @@ const LINE_COLORS = {
     L17: 0xff8844,
     L33: 0x44cc44,
 };
-const TIME_SCALE = 5.0;   // mètres par seconde de sim-time
+
+// Seuil en-dessous duquel on recommande L17 plutôt que L33
+const SUGGEST_THRESHOLD = 0.50;
+
+const TIME_SCALE = 5.0;
 const LAT_M = 111_000;
 
 let scene, camera, webglRenderer, controls;
 let latCenter, lonCenter, lonM;
 let vehicleObjects = [];
+let busMarker = null;
 let nowPlane;
 
 function worldPos(lat, lon, simTime) {
@@ -29,8 +34,47 @@ function clearVehicles() {
         scene.remove(obj);
         obj.geometry?.dispose();
         obj.material?.dispose();
+        if (obj.isGroup) obj.children.forEach(c => { c.geometry?.dispose(); c.material?.dispose(); });
     }
     vehicleObjects = [];
+    if (busMarker) { scene.remove(busMarker); busMarker = null; }
+}
+
+// Forme de bus stylisée (carrosserie + toit)
+function makeBusMarker() {
+    const group = new THREE.Group();
+    const bodyGeo = new THREE.BoxGeometry(280, 90, 130);
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0xffee44, emissive: 0x997700 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    group.add(body);
+    const roofGeo = new THREE.BoxGeometry(220, 45, 110);
+    const roofMat = new THREE.MeshLambertMaterial({ color: 0xffee44, emissive: 0x997700 });
+    const roof = new THREE.Mesh(roofGeo, roofMat);
+    roof.position.y = 67;
+    group.add(roof);
+    // Halo de sélection
+    const haloGeo = new THREE.SphereGeometry(180, 16, 16);
+    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffff88, transparent: true, opacity: 0.08 });
+    group.add(new THREE.Mesh(haloGeo, haloMat));
+    return group;
+}
+
+// Marqueur d'arrêt-clé (transfert / destination)
+function makeStopMarker(pos, color, label) {
+    const group = new THREE.Group();
+    // Pilier vertical depuis Y=0 jusqu'à la position
+    const pillarPts = [new THREE.Vector3(0, -pos.y, 0), new THREE.Vector3(0, 0, 0)];
+    const pillarGeo = new THREE.BufferGeometry().setFromPoints(pillarPts);
+    const pillarMat = new THREE.LineBasicMaterial({ color, opacity: 0.4, transparent: true });
+    group.add(new THREE.Line(pillarGeo, pillarMat));
+    // Sphère à Y=0 (sol géographique)
+    const sGeo = new THREE.SphereGeometry(80, 16, 16);
+    const sMat = new THREE.MeshLambertMaterial({ color, emissive: new THREE.Color(color).multiplyScalar(0.4) });
+    const sphere = new THREE.Mesh(sGeo, sMat);
+    sphere.position.y = -pos.y;
+    group.add(sphere);
+    group.position.copy(pos);
+    return group;
 }
 
 export function init(canvas, config) {
@@ -44,7 +88,7 @@ export function init(canvas, config) {
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
-    scene.fog = new THREE.Fog(0x0a0a12, 12000, 30000);
+    scene.fog = new THREE.Fog(0x0a0a12, 14000, 32000);
 
     const w = canvas.clientWidth || canvas.width || 800;
     const h = canvas.clientHeight || canvas.height || 600;
@@ -66,25 +110,22 @@ export function init(canvas, config) {
     sun.position.set(3000, 8000, 5000);
     scene.add(sun);
 
-    // Grille de fond (plan temporel t=0)
     const grid = new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36);
     scene.add(grid);
 
-    // Tracés géographiques (lignes au sol, Y=0)
+    // Tracés géographiques au sol (Y=0)
     for (const route of routes) {
         const pts = route.shape.map(p => worldPos(p.lat, p.lon, 0));
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const mat = new THREE.LineBasicMaterial({
             color: LINE_COLORS[route.line_id] ?? 0x555555,
-            opacity: 0.4,
-            transparent: true,
+            opacity: 0.35, transparent: true,
         });
         scene.add(new THREE.Line(geo, mat));
 
-        // Points d'arrêt
         for (const stop of route.stops) {
             const pos = worldPos(stop.position.lat, stop.position.lon, 0);
-            const geo = new THREE.SphereGeometry(40, 8, 8);
+            const geo = new THREE.SphereGeometry(35, 8, 8);
             const mat = new THREE.MeshBasicMaterial({ color: LINE_COLORS[route.line_id] ?? 0x555555 });
             const mesh = new THREE.Mesh(geo, mat);
             mesh.position.copy(pos);
@@ -92,25 +133,47 @@ export function init(canvas, config) {
         }
     }
 
-    // Plan "maintenant" (glisse vers le haut avec le temps)
+    // Marqueurs des arrêts de transfert (P1 et P3) plus visibles
+    const shapeByLine = Object.fromEntries(routes.map(r => [r.line_id, r.shape]));
+    const L42shape = shapeByLine['L42'];
+    if (L42shape) {
+        // P1 = 1er arrêt de L42 (index 1)
+        const p1Stop = routes.find(r => r.line_id === 'L42')?.stops[1];
+        if (p1Stop) {
+            const pos = worldPos(p1Stop.position.lat, p1Stop.position.lon, 0);
+            const geo = new THREE.CylinderGeometry(0, 60, 180, 6);
+            const mat = new THREE.MeshLambertMaterial({ color: 0xff8844, emissive: 0x662200 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(pos);
+            mesh.position.y = 90;
+            scene.add(mesh);
+        }
+        // P3 = 3e arrêt de L42 (index 3)
+        const p3Stop = routes.find(r => r.line_id === 'L42')?.stops[3];
+        if (p3Stop) {
+            const pos = worldPos(p3Stop.position.lat, p3Stop.position.lon, 0);
+            const geo = new THREE.CylinderGeometry(0, 60, 180, 6);
+            const mat = new THREE.MeshLambertMaterial({ color: 0x44cc44, emissive: 0x115511 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(pos);
+            mesh.position.y = 90;
+            scene.add(mesh);
+        }
+    }
+
     const planeGeo = new THREE.PlaneGeometry(12000, 12000);
     const planeMat = new THREE.MeshBasicMaterial({
-        color: 0x88aaff,
-        transparent: true,
-        opacity: 0.04,
-        side: THREE.DoubleSide,
+        color: 0x88aaff, transparent: true, opacity: 0.04, side: THREE.DoubleSide,
     });
     nowPlane = new THREE.Mesh(planeGeo, planeMat);
     nowPlane.rotation.x = Math.PI / 2;
     scene.add(nowPlane);
 
-    // Ligne verticale "maintenant"
     const lineGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(-6000, 0, 0), new THREE.Vector3(6000, 0, 0),
     ]);
     const lineMat = new THREE.LineBasicMaterial({ color: 0x88aaff, opacity: 0.3, transparent: true });
-    const nowLine = new THREE.Line(lineGeo, lineMat);
-    nowPlane.add(nowLine);
+    nowPlane.add(new THREE.Line(lineGeo, lineMat));
 
     window.addEventListener('resize', () => {
         const w = canvas.clientWidth;
@@ -134,11 +197,26 @@ export function renderFrame(frame, routes) {
 
     const shapeByLine = Object.fromEntries(routes.map(r => [r.line_id, r.shape]));
 
+    // Décision de trajet suggéré
+    const probL33 = frame.transfers?.find(t => t.to_vehicle_id === 'L33-util')?.probability ?? 0;
+    const suggestedConnector = probL33 >= SUGGEST_THRESHOLD ? 'L33-util' : 'L17-util';
+
+    // Opacité et apparence selon le rôle du véhicule
+    function vehicleStyle(vid) {
+        if (vid === 'L42-util') return { lineOp: 1.0, bandOp: 0.20, bold: true };
+        if (vid === suggestedConnector) return { lineOp: 0.95, bandOp: 0.18, bold: true };
+        // Autre connecteur (non suggéré) : très atténué
+        if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.18, bandOp: 0.04, bold: false };
+        // Bus précédents / suivants
+        return { lineOp: 0.25, bandOp: 0.05, bold: false };
+    }
+
     for (const vehicle of frame.vehicles) {
         const shape = shapeByLine[vehicle.line_id];
         if (!shape) continue;
         const color = LINE_COLORS[vehicle.line_id] ?? 0x888888;
         const traj = vehicle.trajectory;
+        const style = vehicleStyle(vehicle.vehicle_id);
 
         // Ligne p50
         const p50pts = traj.map(pt => {
@@ -146,15 +224,24 @@ export function renderFrame(frame, routes) {
             return worldPos(ll.lat, ll.lon, pt.t);
         });
         if (p50pts.length >= 2) {
+            const lineColor = style.bold ? 0xffffff : color;
             const geo = new THREE.BufferGeometry().setFromPoints(p50pts);
-            const mat = new THREE.LineBasicMaterial({ color, opacity: 0.9, transparent: true });
+            const mat = new THREE.LineBasicMaterial({ color: lineColor, opacity: style.lineOp, transparent: true });
             const line = new THREE.Line(geo, mat);
             scene.add(line);
             vehicleObjects.push(line);
+
+            // Double trait pour les trajets suggérés (effet "gras")
+            if (style.bold) {
+                const geo2 = new THREE.BufferGeometry().setFromPoints(p50pts);
+                const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.6, transparent: true });
+                scene.add(new THREE.Line(geo2, mat2));
+                vehicleObjects.push(new THREE.Line(geo2, mat2));
+            }
         }
 
         // Ruban d'incertitude p10–p90
-        if (traj.length >= 2) {
+        if (traj.length >= 2 && style.bandOp > 0.01) {
             const verts = [];
             for (const pt of traj) {
                 const lo = progressToLatLon(pt.p10, shape);
@@ -169,8 +256,7 @@ export function renderFrame(frame, routes) {
                 positions[i * 3 + 2] = v.z;
             });
             const indices = [];
-            const n = traj.length;
-            for (let i = 0; i < n - 1; i++) {
+            for (let i = 0; i < traj.length - 1; i++) {
                 const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
                 indices.push(a, b, c,  b, d, c);
             }
@@ -179,14 +265,28 @@ export function renderFrame(frame, routes) {
             geo.setIndex(indices);
             geo.computeVertexNormals();
             const mat = new THREE.MeshBasicMaterial({
-                color,
+                color: style.bold ? 0xffffff : color,
                 transparent: true,
-                opacity: 0.12,
+                opacity: style.bandOp,
                 side: THREE.DoubleSide,
             });
             const mesh = new THREE.Mesh(geo, mat);
             scene.add(mesh);
             vehicleObjects.push(mesh);
+        }
+    }
+
+    // Marqueur de position du passager (sur L42-util)
+    const L42util = frame.vehicles.find(v => v.vehicle_id === 'L42-util');
+    if (L42util?.trajectory.length) {
+        const pt0 = L42util.trajectory[0];  // position actuelle (p10=p50=p90)
+        const ll = progressToLatLon(pt0.p50, shapeByLine['L42']);
+        if (ll) {
+            busMarker = makeBusMarker();
+            busMarker.position.copy(worldPos(ll.lat, ll.lon, frame.sim_time));
+            // Orienter le bus dans la direction du tracé (axe X pour L42 est-ouest)
+            busMarker.rotation.y = Math.PI / 2;
+            scene.add(busMarker);
         }
     }
 }

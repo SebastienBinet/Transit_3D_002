@@ -47,6 +47,13 @@
       background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
       border: 1px solid #334; font-size: 12px; line-height: 2;
     }
+    #debug-overlay {
+      position: fixed; bottom: 70px; right: 16px;
+      background: rgba(0,0,0,0.85); padding: 8px 12px; border-radius: 8px;
+      border: 1px solid #556; font-size: 11px; line-height: 1.7;
+      color: #aaffaa; font-family: monospace; min-width: 260px;
+    }
+    #debug-overlay span { color: #ffee88; }
   </style>
 </head>
 <body>
@@ -64,6 +71,15 @@
     <div>P(attraper L17) : <span id="prob-l17">—</span></div>
     <div id="suggestion" style="margin-top:6px; font-weight:bold; font-size:13px; color:#ffee44">—</div>
     <div id="arrival" style="margin-top:3px; font-size:11px; color:#aabbcc">Arrivée estimée : —</div>
+  </div>
+
+  <div id="debug-overlay">
+    tick Δ : <span id="dbg-tick-delta">—</span><br>
+    tick max Δ : <span id="dbg-tick-max">—</span><br>
+    drawFrame ms : <span id="dbg-draw-ms">—</span><br>
+    drawFrame max : <span id="dbg-draw-max">—</span><br>
+    frames/s : <span id="dbg-fps">—</span><br>
+    frame # : <span id="dbg-frame-idx">—</span>
   </div>
 
   <div id="hud">
@@ -84,7 +100,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
 
     const canvas = document.getElementById('canvas');
@@ -152,24 +168,49 @@
       updateHud();
     }
 
-    let _tickCount = 0;
-    let _lastTickTs = null;
+    // Métriques de debug
+    const dbg = {
+      tickDelta: 0, tickDeltaMax: 0,
+      drawMax: 0, fps: 0,
+      frameIdx: 0,
+      _fpsCount: 0, _fpsTs: 0,
+    };
+    function updateDebug(rawDeltaMs) {
+      dbg.tickDelta = rawDeltaMs;
+      if (rawDeltaMs > dbg.tickDeltaMax) dbg.tickDeltaMax = rawDeltaMs;
+      const drawMs = lastDrawMs; // live binding depuis renderer.js
+      if (drawMs > dbg.drawMax) dbg.drawMax = drawMs;
+      dbg._fpsCount++;
+      const now = performance.now();
+      if (now - dbg._fpsTs >= 1000) {
+        dbg.fps = dbg._fpsCount;
+        dbg._fpsCount = 0;
+        dbg._fpsTs = now;
+        // Réinitialiser les max toutes les secondes
+        dbg.tickDeltaMax = rawDeltaMs;
+        dbg.drawMax = drawMs;
+      }
+      document.getElementById('dbg-tick-delta').textContent = rawDeltaMs.toFixed(1) + ' ms';
+      document.getElementById('dbg-tick-max').textContent  = dbg.tickDeltaMax.toFixed(1) + ' ms';
+      document.getElementById('dbg-draw-ms').textContent   = drawMs.toFixed(1) + ' ms';
+      document.getElementById('dbg-draw-max').textContent  = dbg.drawMax.toFixed(1) + ' ms';
+      document.getElementById('dbg-fps').textContent       = dbg.fps;
+      document.getElementById('dbg-frame-idx').textContent = dbg.frameIdx;
+    }
+
     function tick(ts) {
       requestAnimationFrame(tick);
+      const rawDeltaMs = lastTs !== null ? (ts - lastTs) : 0;
       if (lastTs !== null && player?.isPlaying) {
-        const rawDelta = (ts - lastTs) / 1000;
-        const wallDelta = Math.min(rawDelta, 0.1);
-        _tickCount++;
-        if (_tickCount % 60 === 0 || rawDelta > 0.05) {
-          console.log(`[tick #${_tickCount}] rawDelta=${(rawDelta*1000).toFixed(1)}ms wallDelta=${(wallDelta*1000).toFixed(1)}ms simTime=${player.simTime.toFixed(1)} isPlaying=${player.isPlaying}`);
-        }
+        const wallDelta = Math.min(rawDeltaMs / 1000, 0.1);
         const frameChanged = player.tick(wallDelta);
         if (frameChanged) {
-          console.log(`[tick] frame changée → simTime=${player.simTime.toFixed(1)}, appel renderFrame`);
+          dbg.frameIdx++;
           renderFrame(player.frame, routes);
         }
         updateHud();
       }
+      if (lastTs !== null) updateDebug(rawDeltaMs);
       lastTs = ts;
     }
 

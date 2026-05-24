@@ -101,12 +101,18 @@
       update();
     }
 
-    function update() {
+    // Mise à jour Three.js : appelée seulement quand la frame change
+    function renderScene() {
       if (!player || !routes) return;
       renderFrame(player.frame, routes);
+    }
+
+    // Mise à jour DOM : appelée à chaque tick RAF pour un affichage fluide
+    function updateHud() {
+      if (!player || !routes) return;
       document.getElementById('time-display').textContent =
         `T = ${Math.round(player.simTime)} s`;
-      const transfers = player.frame.transfers ?? [];
+      const transfers = player.frame?.transfers ?? [];
       const l33 = transfers.find(t => t.to_vehicle_id === 'L33-util');
       const l17 = transfers.find(t => t.to_vehicle_id === 'L17-util');
       document.getElementById('prob-l33').textContent =
@@ -123,8 +129,7 @@
         sugEl.textContent = '→ Descendre à P1, prendre L17';
         sugEl.style.color = '#ff8844';
       }
-      // Heure d'arrivée estimée (p50 du véhicule de correspondance)
-      const connVeh = player.frame.vehicles?.find(v => v.vehicle_id === connectorId);
+      const connVeh = player.frame?.vehicles?.find(v => v.vehicle_id === connectorId);
       const connRoute = routes.find(r => r.line_id === connectorId.split('-')[0]);
       let tArrival = null;
       if (connVeh && connRoute) {
@@ -146,10 +151,17 @@
         : 'Arrivée estimée : hors horizon';
     }
 
+    // Appelée lors du chargement initial et du rembobinage
+    function update() {
+      renderScene();
+      updateHud();
+    }
+
     function tick(ts) {
       requestAnimationFrame(tick);
       if (lastTs !== null && player?.isPlaying) {
-        if (player.tick((ts - lastTs) / 1000)) update();
+        if (player.tick((ts - lastTs) / 1000)) renderScene();
+        updateHud();
       }
       lastTs = ts;
     }

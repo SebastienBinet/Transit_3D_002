@@ -101,12 +101,6 @@
       update();
     }
 
-    // Mise à jour Three.js : appelée seulement quand la frame change
-    function renderScene() {
-      if (!player || !routes) return;
-      renderFrame(player.frame, routes);
-    }
-
     // Mise à jour DOM : appelée à chaque tick RAF pour un affichage fluide
     function updateHud() {
       if (!player || !routes) return;
@@ -153,14 +147,17 @@
 
     // Appelée lors du chargement initial et du rembobinage
     function update() {
-      renderScene();
+      if (!player || !routes) return;
+      renderFrame(player.frame, routes);
       updateHud();
     }
 
     function tick(ts) {
       requestAnimationFrame(tick);
       if (lastTs !== null && player?.isPlaying) {
-        if (player.tick((ts - lastTs) / 1000)) renderScene();
+        // Plafonner le delta à 100 ms pour éviter les grands sauts après un rendu lent
+        const wallDelta = Math.min((ts - lastTs) / 1000, 0.1);
+        if (player.tick(wallDelta)) renderFrame(player.frame, routes);
         updateHud();
       }
       lastTs = ts;

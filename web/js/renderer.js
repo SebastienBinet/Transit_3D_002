@@ -254,11 +254,23 @@ export function init(canvas, config) {
         webglRenderer.setSize(w, h, false);
     });
 
+    let _loopCount = 0;
+    let _lastLoopTs = performance.now();
     (function loop() {
         requestAnimationFrame(loop);
+        const now = performance.now();
+        const loopDelta = now - _lastLoopTs;
+        _lastLoopTs = now;
+        _loopCount++;
+        if (_loopCount % 60 === 0) {
+            console.log(`[loop] tick #${_loopCount} loopDelta=${loopDelta.toFixed(1)}ms pendingFrame=${!!pendingFrame}`);
+        }
         if (pendingFrame) {
+            const t0 = performance.now();
+            const simTime = pendingFrame.frame.sim_time;
             drawFrame(pendingFrame.frame, pendingFrame.routes);
             pendingFrame = null;
+            console.log(`[drawFrame] simTime=${simTime} durée=${(performance.now()-t0).toFixed(1)}ms`);
         }
         controls.update();
         webglRenderer.render(scene, camera);

@@ -152,12 +152,22 @@
       updateHud();
     }
 
+    let _tickCount = 0;
+    let _lastTickTs = null;
     function tick(ts) {
       requestAnimationFrame(tick);
       if (lastTs !== null && player?.isPlaying) {
-        // Plafonner le delta à 100 ms pour éviter les grands sauts après un rendu lent
-        const wallDelta = Math.min((ts - lastTs) / 1000, 0.1);
-        if (player.tick(wallDelta)) renderFrame(player.frame, routes);
+        const rawDelta = (ts - lastTs) / 1000;
+        const wallDelta = Math.min(rawDelta, 0.1);
+        _tickCount++;
+        if (_tickCount % 60 === 0 || rawDelta > 0.05) {
+          console.log(`[tick #${_tickCount}] rawDelta=${(rawDelta*1000).toFixed(1)}ms wallDelta=${(wallDelta*1000).toFixed(1)}ms simTime=${player.simTime.toFixed(1)} isPlaying=${player.isPlaying}`);
+        }
+        const frameChanged = player.tick(wallDelta);
+        if (frameChanged) {
+          console.log(`[tick] frame changée → simTime=${player.simTime.toFixed(1)}, appel renderFrame`);
+          renderFrame(player.frame, routes);
+        }
         updateHud();
       }
       lastTs = ts;

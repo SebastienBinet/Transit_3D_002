@@ -24,7 +24,7 @@ STOP_COORDS: dict[str, tuple[float, float]] = {
 
 LINE_STOPS: dict[str, list[str]] = {
     "L42": ["O", "P1", "P2", "P3", "P4"],
-    "L17": ["H1", "H2", "P1", "H3", "H4"],
+    "L17": ["H1", "H2", "P1", "H3", "H4", "G4"],
     "L33": ["G1", "G2", "P3", "G3", "G4"],
 }
 
@@ -66,7 +66,7 @@ FREQ_L33 = 1200.0       # 20 min
 
 # L33-util passe P3 à T=560 s → P(attraper) ≈ 95 % au départ
 L33_P3_TIME = 560.0
-L17_P1_TIME = 300.0
+L17_P1_TIME = 450.0
 L17_P1_DWELL = 60.0    # durée d'arrêt à P1
 
 

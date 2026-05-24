@@ -79,8 +79,8 @@ def test_scenario1_passager_transfere_sur_L33():
 
 def test_scenario2_passager_transfere_sur_L17():
     out = simulate(2)
-    # Frames après T=300 s (index 60)
-    late_frames = [f for f in out.frames if f.sim_time > 350]
+    # Frames après T=450 s (embarquement L17 à T=450 s)
+    late_frames = [f for f in out.frames if f.sim_time > 500]
     for frame in late_frames[:5]:
         assert frame.passenger.state == "transferred"
         assert frame.passenger.vehicle_id == "L17-util"

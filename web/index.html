@@ -54,6 +54,12 @@
       color: #aaffaa; font-family: monospace; min-width: 260px;
     }
     #debug-overlay span { color: #ffee88; }
+    #build-info {
+      position: fixed; bottom: 20px; left: 16px;
+      background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 6px;
+      border: 1px solid #334; font-size: 10px; color: #667; font-family: monospace;
+      line-height: 1.7;
+    }
   </style>
 </head>
 <body>
@@ -81,6 +87,8 @@
     frames/s : <span id="dbg-fps">—</span><br>
     frame # : <span id="dbg-frame-idx">—</span>
   </div>
+
+  <div id="build-info">Sim : —<br>Visu : —</div>
 
   <div id="hud">
     <select id="scenario-select">
@@ -220,6 +228,15 @@
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));
     document.getElementById('scenario-select').onchange = e => load(e.target.value);
+
+    fetch('./data/build_info.json')
+      .then(r => r.ok ? r.json() : null)
+      .then(info => {
+        if (!info) return;
+        document.getElementById('build-info').innerHTML =
+          `Sim : ${info.sim_date}<br>Visu : ${info.viz_built_at}`;
+      })
+      .catch(() => {});
 
     await load(1);
     requestAnimationFrame(tick);

@@ -62,6 +62,7 @@
   <div id="prob-display">
     <div>P(attraper L33) : <span id="prob-l33">—</span></div>
     <div>P(attraper L17) : <span id="prob-l17">—</span></div>
+    <div id="suggestion" style="margin-top:6px; font-weight:bold; font-size:13px; color:#ffee44">—</div>
   </div>
 
   <div id="hud">
@@ -111,6 +112,15 @@
         l33 ? (l33.probability * 100).toFixed(1) + ' %' : '—';
       document.getElementById('prob-l17').textContent =
         l17 ? (l17.probability * 100).toFixed(1) + ' %' : '—';
+      const probL33 = l33?.probability ?? 0;
+      const sugEl = document.getElementById('suggestion');
+      if (probL33 >= 0.50) {
+        sugEl.textContent = '→ Rester sur L42, transfert à P3 → L33';
+        sugEl.style.color = '#44cc44';
+      } else {
+        sugEl.textContent = '→ Descendre à P1, prendre L17';
+        sugEl.style.color = '#ff8844';
+      }
     }
 
     function tick(ts) {

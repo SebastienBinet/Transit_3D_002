@@ -63,6 +63,7 @@
     <div>P(attraper L33) : <span id="prob-l33">—</span></div>
     <div>P(attraper L17) : <span id="prob-l17">—</span></div>
     <div id="suggestion" style="margin-top:6px; font-weight:bold; font-size:13px; color:#ffee44">—</div>
+    <div id="arrival" style="margin-top:3px; font-size:11px; color:#aabbcc">Arrivée estimée : —</div>
   </div>
 
   <div id="hud">
@@ -114,6 +115,7 @@
         l17 ? (l17.probability * 100).toFixed(1) + ' %' : '—';
       const probL33 = l33?.probability ?? 0;
       const sugEl = document.getElementById('suggestion');
+      const connectorId = probL33 >= 0.50 ? 'L33-util' : 'L17-util';
       if (probL33 >= 0.50) {
         sugEl.textContent = '→ Rester sur L42, transfert à P3 → L33';
         sugEl.style.color = '#44cc44';
@@ -121,6 +123,27 @@
         sugEl.textContent = '→ Descendre à P1, prendre L17';
         sugEl.style.color = '#ff8844';
       }
+      // Heure d'arrivée estimée (p50 du véhicule de correspondance)
+      const connVeh = player.frame.vehicles?.find(v => v.vehicle_id === connectorId);
+      const connRoute = routes.find(r => r.line_id === connectorId.split('-')[0]);
+      let tArrival = null;
+      if (connVeh && connRoute) {
+        const LAT_M = 111000;
+        const lm = LAT_M * Math.cos(connRoute.shape[0].lat * Math.PI / 180);
+        let rLen = 0;
+        for (let i = 1; i < connRoute.shape.length; i++) {
+          const dy = (connRoute.shape[i].lat - connRoute.shape[i-1].lat) * LAT_M;
+          const dx = (connRoute.shape[i].lon - connRoute.shape[i-1].lon) * lm;
+          rLen += Math.sqrt(dy*dy + dx*dx);
+        }
+        for (const pt of connVeh.trajectory) {
+          if (pt.p50 >= rLen * 0.97) { tArrival = pt.t; break; }
+        }
+      }
+      const arrEl = document.getElementById('arrival');
+      arrEl.textContent = tArrival != null
+        ? `Arrivée estimée : T = ${Math.round(tArrival)} s (${Math.floor(tArrival/60)} min ${Math.round(tArrival%60)} s)`
+        : 'Arrivée estimée : hors horizon';
     }
 
     function tick(ts) {

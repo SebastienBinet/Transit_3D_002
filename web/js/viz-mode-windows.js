@@ -1,13 +1,11 @@
-// Stratégie 1+2 : fenêtres de correspondance (statiques) + marges dynamiques
-// Reçoit THREE en paramètre ; ne l'importe pas (seul renderer.js importe Three.js).
+// Stratégie 1+2 : fenêtres de correspondance + marges dynamiques
+// Tous les éléments sont recréés à chaque frame pour suivre Y = 0 = maintenant.
+// Reçoit THREE en paramètre ; ne l'importe pas.
 
 const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
 
 export function create(THREE, { scene, routes, transferWindows, worldPos }) {
-    const staticObjects = [];
-    const dynamicObjects = [];
-
-    function addTo(arr, obj) { scene.add(obj); arr.push(obj); }
+    const objects = [];
 
     function disposeObj(obj) {
         scene.remove(obj);
@@ -15,12 +13,14 @@ export function create(THREE, { scene, routes, transferWindows, worldPos }) {
         obj.material?.dispose();
     }
 
-    // Ajoute une ligne avec double-passe pour compenser l'absence de linewidth WebGL
-    function addLine(arr, pts, color, opacity) {
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        addTo(arr, new THREE.Line(geo, new THREE.LineBasicMaterial({ color, opacity, transparent: true })));
+    // Double-passe pour simuler un trait épais (WebGL ignore linewidth > 1)
+    function addLine(pts, color, opacity) {
+        const geo1 = new THREE.BufferGeometry().setFromPoints(pts);
+        const l1 = new THREE.Line(geo1, new THREE.LineBasicMaterial({ color, opacity, transparent: true }));
+        scene.add(l1); objects.push(l1);
         const geo2 = new THREE.BufferGeometry().setFromPoints(pts);
-        addTo(arr, new THREE.Line(geo2, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: opacity * 0.35, transparent: true })));
+        const l2 = new THREE.Line(geo2, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: opacity * 0.35, transparent: true }));
+        scene.add(l2); objects.push(l2);
     }
 
     function stopLatLon(stopId) {
@@ -36,42 +36,38 @@ export function create(THREE, { scene, routes, transferWindows, worldPos }) {
         return l42?.stops.find(s => s.stop_id === stopId)?.progress_m ?? null;
     }
 
-    // --- Stratégie 1 : disque + barre de stationnement (statiques) ---
-    for (const win of transferWindows) {
-        const connLine = win.connector_vehicle_id.split('-')[0];
-        const color = LINE_COLORS[connLine] ?? 0xffffff;
-        const ll = stopLatLon(win.stop_id);
-        if (!ll) continue;
-
-        const posOpen  = worldPos(ll.lat, ll.lon, win.t_open);
-        const posClose = worldPos(ll.lat, ll.lon, win.t_close);
-
-        // Disque horizontal : marque l'ouverture de la fenêtre
-        const disc = new THREE.Mesh(
-            new THREE.CircleGeometry(200, 32),
-            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
-        );
-        disc.rotation.x = -Math.PI / 2;
-        disc.position.copy(posOpen);
-        addTo(staticObjects, disc);
-
-        // Barre verticale double : durée de stationnement du connecteur
-        addLine(staticObjects, [posOpen.clone(), posClose.clone()], color, 1.0);
-    }
-
-    // --- Stratégie 2 : marge dynamique (mise à jour par frame) ---
     function update(frame) {
-        for (const obj of dynamicObjects) disposeObj(obj);
-        dynamicObjects.length = 0;
+        // Tout supprimer — les positions Y dépendent du temps courant
+        for (const obj of objects) disposeObj(obj);
+        objects.length = 0;
 
         const l42 = frame.vehicles?.find(v => v.vehicle_id === 'L42-util');
-        if (!l42) return;
 
         for (const win of transferWindows) {
             const connLine = win.connector_vehicle_id.split('-')[0];
+            const color = LINE_COLORS[connLine] ?? 0xffffff;
             const ll = stopLatLon(win.stop_id);
+            if (!ll) continue;
+
+            // worldPos utilise currentSimTime du renderer → Y relatif au présent
+            const posOpen  = worldPos(ll.lat, ll.lon, win.t_open);
+            const posClose = worldPos(ll.lat, ll.lon, win.t_close);
+
+            // --- Stratégie 1 : disque + barre de stationnement ---
+            const disc = new THREE.Mesh(
+                new THREE.CircleGeometry(210, 32),
+                new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
+            );
+            disc.rotation.x = -Math.PI / 2;
+            disc.position.copy(posOpen);
+            scene.add(disc); objects.push(disc);
+
+            addLine([posOpen.clone(), posClose.clone()], color, 1.0);
+
+            // --- Stratégie 2 : marge dynamique ---
+            if (!l42) continue;
             const progOnL42 = stopProgressOnL42(win.stop_id);
-            if (!ll || progOnL42 === null) continue;
+            if (progOnL42 === null) continue;
 
             let tEst = null;
             for (const pt of l42.trajectory) {
@@ -81,32 +77,29 @@ export function create(THREE, { scene, routes, transferWindows, worldPos }) {
 
             const margin = win.t_close - tEst;
 
-            let color;
-            if (margin <= 0)      color = 0x666666;  // fenêtre fermée
-            else if (margin < 45) color = 0xff3333;  // serré
-            else if (margin < 90) color = 0xffaa22;  // attention
-            else                  color = 0x33ee77;  // confortable
+            let markerColor;
+            if (margin <= 0)      markerColor = 0x666666;
+            else if (margin < 45) markerColor = 0xff3333;
+            else if (margin < 90) markerColor = 0xffaa22;
+            else                  markerColor = 0x33ee77;
 
-            // Sphère : arrivée estimée de L42 à l'arrêt
             const posEst = worldPos(ll.lat, ll.lon, tEst);
             const dot = new THREE.Mesh(
-                new THREE.SphereGeometry(110, 14, 14),
-                new THREE.MeshBasicMaterial({ color }),
+                new THREE.SphereGeometry(120, 14, 14),
+                new THREE.MeshBasicMaterial({ color: markerColor }),
             );
             dot.position.copy(posEst);
-            addTo(dynamicObjects, dot);
+            scene.add(dot); objects.push(dot);
 
             if (margin > 0) {
-                const posClose = worldPos(ll.lat, ll.lon, win.t_close);
-                addLine(dynamicObjects, [posEst.clone(), posClose.clone()], color, 1.0);
+                addLine([posEst.clone(), posClose.clone()], markerColor, 1.0);
             }
         }
     }
 
     function dispose() {
-        for (const obj of [...staticObjects, ...dynamicObjects]) disposeObj(obj);
-        staticObjects.length = 0;
-        dynamicObjects.length = 0;
+        for (const obj of objects) disposeObj(obj);
+        objects.length = 0;
     }
 
     return { update, dispose };

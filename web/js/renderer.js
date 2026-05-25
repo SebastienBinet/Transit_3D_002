@@ -23,14 +23,26 @@ let checkerTexture = null;
 let pendingFrame = null;
 export let lastDrawMs = 0;
 
-// Gestion du mode de visualisation
+// Temps simulé courant — mis à jour au début de chaque drawFrame
+let currentSimTime = 0;
+
 let activeVizMode = null;
 let vizCtx = null;
 
-function worldPos(lat, lon, simTime) {
+// Position géographique pure, toujours au niveau du sol (Y = 0 = maintenant)
+function geoPos(lat, lon) {
     return new THREE.Vector3(
         (lon - lonCenter) * lonM,
-        simTime * TIME_SCALE,
+        0,
+        (lat - latCenter) * LAT_M,
+    );
+}
+
+// Position espace-temps : Y = (t − simTime courant) × TIME_SCALE
+function worldPos(lat, lon, t) {
+    return new THREE.Vector3(
+        (lon - lonCenter) * lonM,
+        (t - currentSimTime) * TIME_SCALE,
         (lat - latCenter) * LAT_M,
     );
 }
@@ -84,21 +96,16 @@ function makeFinishFlag(position) {
     return group;
 }
 
-function makeStopMarker(pos, color) {
-    const group = new THREE.Group();
-    const pillarPts = [new THREE.Vector3(0, -pos.y, 0), new THREE.Vector3(0, 0, 0)];
-    group.add(new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(pillarPts),
-        new THREE.LineBasicMaterial({ color, opacity: 0.4, transparent: true }),
-    ));
-    const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(80, 16, 16),
-        new THREE.MeshLambertMaterial({ color, emissive: new THREE.Color(color).multiplyScalar(0.4) }),
-    );
-    sphere.position.y = -pos.y;
-    group.add(sphere);
-    group.position.copy(pos);
-    return group;
+// Ajoute deux lignes superposées pour simuler un trait plus épais (limite WebGL)
+function addBoldLine(pts, color, opacity) {
+    const geo1 = new THREE.BufferGeometry().setFromPoints(pts);
+    const line1 = new THREE.Line(geo1, new THREE.LineBasicMaterial({ color, opacity, transparent: true }));
+    scene.add(line1);
+    vehicleObjects.push(line1);
+    const geo2 = new THREE.BufferGeometry().setFromPoints(pts);
+    const line2 = new THREE.Line(geo2, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: opacity * 0.4, transparent: true }));
+    scene.add(line2);
+    vehicleObjects.push(line2);
 }
 
 export function init(canvas, config) {
@@ -109,6 +116,8 @@ export function init(canvas, config) {
     latCenter = (Math.min(...allLats) + Math.max(...allLats)) / 2;
     lonCenter = (Math.min(...allLons) + Math.max(...allLons)) / 2;
     lonM = LAT_M * Math.cos(latCenter * Math.PI / 180);
+
+    currentSimTime = 0;
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
@@ -136,27 +145,27 @@ export function init(canvas, config) {
 
     scene.add(new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36));
 
-    // Tracés géographiques au sol
+    // Tracés géographiques au sol (Y = 0 = maintenant, via geoPos)
     for (const route of routes) {
-        const pts = route.shape.map(p => worldPos(p.lat, p.lon, 0));
+        const pts = route.shape.map(p => geoPos(p.lat, p.lon));
         scene.add(new THREE.Line(
             new THREE.BufferGeometry().setFromPoints(pts),
             new THREE.LineBasicMaterial({
                 color: LINE_COLORS[route.line_id] ?? 0x555555,
-                opacity: 0.60, transparent: true,
+                opacity: 0.65, transparent: true,
             }),
         ));
         for (const stop of route.stops) {
             const mesh = new THREE.Mesh(
-                new THREE.SphereGeometry(35, 8, 8),
+                new THREE.SphereGeometry(45, 8, 8),
                 new THREE.MeshBasicMaterial({ color: LINE_COLORS[route.line_id] ?? 0x555555 }),
             );
-            mesh.position.copy(worldPos(stop.position.lat, stop.position.lon, 0));
+            mesh.position.copy(geoPos(stop.position.lat, stop.position.lon));
             scene.add(mesh);
         }
     }
 
-    // Cônes des arrêts de transfert (P1 et P3)
+    // Cônes des arrêts de transfert (P1 et P3) au sol
     for (const win of tw) {
         const connLine = win.connector_vehicle_id.split('-')[0];
         const color = LINE_COLORS[connLine] ?? 0xffffff;
@@ -164,27 +173,26 @@ export function init(canvas, config) {
         const stop = l42Route?.stops.find(s => s.stop_id === win.stop_id);
         if (!stop) continue;
         const cone = new THREE.Mesh(
-            new THREE.CylinderGeometry(0, 60, 180, 6),
-            new THREE.MeshLambertMaterial({ color, emissive: new THREE.Color(color).multiplyScalar(0.3) }),
+            new THREE.CylinderGeometry(0, 80, 220, 6),
+            new THREE.MeshLambertMaterial({ color, emissive: new THREE.Color(color).multiplyScalar(0.35) }),
         );
-        cone.position.copy(worldPos(stop.position.lat, stop.position.lon, 0));
-        cone.position.y = 90;
+        cone.position.copy(geoPos(stop.position.lat, stop.position.lon));
+        cone.position.y = 110;
         scene.add(cone);
     }
 
-    // Plan "maintenant"
-    const planeGeo = new THREE.PlaneGeometry(12000, 12000);
+    // Plan "maintenant" fixe à Y = 0
     const planeMat = new THREE.MeshBasicMaterial({
-        color: 0x88aaff, transparent: true, opacity: 0.04, side: THREE.DoubleSide,
+        color: 0x88aaff, transparent: true, opacity: 0.06, side: THREE.DoubleSide,
     });
-    nowPlane = new THREE.Mesh(planeGeo, planeMat);
+    nowPlane = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000), planeMat);
     nowPlane.rotation.x = Math.PI / 2;
     scene.add(nowPlane);
     nowPlane.add(new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([
             new THREE.Vector3(-6000, 0, 0), new THREE.Vector3(6000, 0, 0),
         ]),
-        new THREE.LineBasicMaterial({ color: 0x88aaff, opacity: 0.3, transparent: true }),
+        new THREE.LineBasicMaterial({ color: 0x88aaff, opacity: 0.5, transparent: true }),
     ));
 
     window.addEventListener('resize', () => {
@@ -194,8 +202,7 @@ export function init(canvas, config) {
         webglRenderer.setSize(w, h, false);
     });
 
-    // Prépare le contexte partagé avec les modes de visualisation
-    vizCtx = { scene, routes, transferWindows: tw, worldPos, progressToLatLon, estimateArrival };
+    vizCtx = { scene, routes, transferWindows: tw, worldPos, geoPos, progressToLatLon, estimateArrival };
 
     (function loop() {
         requestAnimationFrame(loop);
@@ -210,7 +217,6 @@ export function init(canvas, config) {
     })();
 }
 
-// Change le mode de visualisation actif. Peut être appelé après init().
 export function setVizMode(name) {
     activeVizMode?.dispose();
     activeVizMode = null;
@@ -224,9 +230,10 @@ export function renderFrame(frame, routes) {
 }
 
 function drawFrame(frame, routes) {
-    clearVehicles();
+    // Y = 0 est toujours le moment présent — mettre à jour avant tout worldPos
+    currentSimTime = frame.sim_time;
 
-    if (nowPlane) nowPlane.position.y = frame.sim_time * TIME_SCALE;
+    clearVehicles();
 
     const shapeByLine = Object.fromEntries(routes.map(r => [r.line_id, r.shape]));
 
@@ -234,10 +241,10 @@ function drawFrame(frame, routes) {
     const suggestedConnector = probL33 >= SUGGEST_THRESHOLD ? 'L33-util' : 'L17-util';
 
     function vehicleStyle(vid) {
-        if (vid === 'L42-util') return { lineOp: 1.0, bandOp: 0.32, bold: true };
-        if (vid === suggestedConnector) return { lineOp: 1.0, bandOp: 0.28, bold: true };
-        if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.35, bandOp: 0.10, bold: false };
-        return { lineOp: 0.38, bandOp: 0.09, bold: false };
+        if (vid === 'L42-util')        return { lineOp: 1.0,  bandOp: 0.35, bold: true };
+        if (vid === suggestedConnector) return { lineOp: 1.0,  bandOp: 0.30, bold: true };
+        if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.40, bandOp: 0.12, bold: false };
+        return { lineOp: 0.40, bandOp: 0.10, bold: false };
     }
 
     for (const vehicle of frame.vehicles) {
@@ -251,22 +258,17 @@ function drawFrame(frame, routes) {
             const ll = progressToLatLon(pt.p50, shape);
             return worldPos(ll.lat, ll.lon, pt.t);
         });
-        if (p50pts.length >= 2) {
-            const geo = new THREE.BufferGeometry().setFromPoints(p50pts);
-            const mat = new THREE.LineBasicMaterial({
-                color: style.bold ? 0xffffff : color,
-                opacity: style.lineOp, transparent: true,
-            });
-            const line = new THREE.Line(geo, mat);
-            scene.add(line);
-            vehicleObjects.push(line);
 
+        if (p50pts.length >= 2) {
             if (style.bold) {
-                const geo2 = new THREE.BufferGeometry().setFromPoints(p50pts);
-                const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.85, transparent: true });
-                const line2 = new THREE.Line(geo2, mat2);
-                scene.add(line2);
-                vehicleObjects.push(line2);
+                addBoldLine(p50pts, color, style.lineOp);
+            } else {
+                const geo = new THREE.BufferGeometry().setFromPoints(p50pts);
+                const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+                    color, opacity: style.lineOp, transparent: true,
+                }));
+                scene.add(line);
+                vehicleObjects.push(line);
             }
         }
 
@@ -302,18 +304,46 @@ function drawFrame(frame, routes) {
         }
     }
 
-    // Drapeaux à la destination (G4) pour les deux connecteurs
+    // Marqueur de l'autobus L42 (position présente = Y 0)
+    const l42Veh = frame.vehicles.find(v => v.vehicle_id === 'L42-util');
+    if (l42Veh && shapeByLine['L42']) {
+        const pt0 = l42Veh.trajectory[0];
+        const ll  = progressToLatLon(pt0.p50, shapeByLine['L42']);
+        const busPos = worldPos(ll.lat, ll.lon, pt0.t); // Y = 0
+
+        // Corps du bus
+        const busGeo = new THREE.BoxGeometry(300, 110, 150);
+        const busMat = new THREE.MeshLambertMaterial({ color: 0x4488ff, emissive: 0x1133aa });
+        const bus = new THREE.Mesh(busGeo, busMat);
+        bus.position.copy(busPos);
+        bus.position.y += 55;
+        bus.rotation.y = Math.PI / 2;
+        scene.add(bus);
+        vehicleObjects.push(bus);
+
+        // Halo lumineux
+        const halo = new THREE.Mesh(
+            new THREE.SphereGeometry(220, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.18 }),
+        );
+        halo.position.copy(busPos);
+        scene.add(halo);
+        vehicleObjects.push(halo);
+    }
+
+    // Drapeaux d'arrivée à G4 pour les deux connecteurs
     for (const connId of ['L33-util', 'L17-util']) {
         const connVeh = frame.vehicles.find(v => v.vehicle_id === connId);
         const connRoute = routes.find(r => r.line_id === connId.split('-')[0]);
         if (!connVeh || !connRoute) continue;
 
         const destStop = connRoute.stops.at(-1);
-        const groundPos = worldPos(destStop.position.lat, destStop.position.lon, 0);
-        const flagGround = makeFinishFlag(groundPos);
+        // Drapeau au sol (Y = 0)
+        const flagGround = makeFinishFlag(geoPos(destStop.position.lat, destStop.position.lon));
         scene.add(flagGround);
         vehicleObjects.push(flagGround);
 
+        // Drapeau à l'heure d'arrivée estimée (descend vers Y = 0 en approchant)
         const tArrival = estimateArrival(connVeh.trajectory, connRoute.length_m);
         if (tArrival != null) {
             const arrivalPos = worldPos(destStop.position.lat, destStop.position.lon, tArrival);
@@ -321,16 +351,18 @@ function drawFrame(frame, routes) {
             scene.add(flagArrival);
             vehicleObjects.push(flagArrival);
 
-            const connGeo = new THREE.BufferGeometry().setFromPoints([groundPos.clone(), arrivalPos.clone()]);
-            const connLine = new THREE.Line(connGeo, new THREE.LineBasicMaterial({
-                color: 0xffffff, opacity: 0.45, transparent: true,
-            }));
+            const connLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints([
+                    geoPos(destStop.position.lat, destStop.position.lon),
+                    arrivalPos.clone(),
+                ]),
+                new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.35, transparent: true }),
+            );
             scene.add(connLine);
             vehicleObjects.push(connLine);
         }
     }
 
-    // Délègue au mode de visualisation actif
     activeVizMode?.update(frame);
 }
 

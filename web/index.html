@@ -105,10 +105,14 @@
       <option value="120">×120</option>
     </select>
     <span id="time-display">T = 0 s</span>
+    <select id="viz-mode-select" title="Mode de visualisation">
+      <option value="windows">Fenêtres</option>
+      <option value="fork">Fourche</option>
+    </select>
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
 
     const canvas = document.getElementById('canvas');
@@ -119,7 +123,8 @@
     async function load(scenarioId) {
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
       routes = data.routes;
-      init(canvas, { routes, passengerTrajectory: data.passenger_trajectory ?? [] });
+      init(canvas, { routes, transferWindows: data.transfer_windows ?? [] });
+      setVizMode(document.getElementById('viz-mode-select').value);
       player = createPlayer(data.frames);
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
@@ -228,6 +233,10 @@
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));
     document.getElementById('scenario-select').onchange = e => load(e.target.value);
+    document.getElementById('viz-mode-select').onchange = e => {
+      setVizMode(e.target.value);
+      update();
+    };
 
     fetch('./data/build_info.json')
       .then(r => r.ok ? r.json() : null)

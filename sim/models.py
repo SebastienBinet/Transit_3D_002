@@ -82,15 +82,25 @@ class Stop(BaseModel):
     stop_id: str
     name: str
     position: LatLon
+    progress_m: float = 0.0  # distance depuis le premier arrêt de la ligne
 
 
 class RouteGeometry(BaseModel):
     line_id: str
     stops: list[Stop]
     shape: list[LatLon]
+    length_m: float = 0.0  # longueur totale du tracé
+
+
+class TransferWindow(BaseModel):
+    stop_id: str
+    connector_vehicle_id: str
+    t_open: float   # heure d'arrivée du connecteur à l'arrêt
+    t_close: float  # heure de départ du connecteur
 
 
 class SimulationOutput(BaseModel):
     routes: list[RouteGeometry]
     frames: list[Frame]
     passenger_trajectory: list[PassengerCheckpoint] = []
+    transfer_windows: list[TransferWindow] = []

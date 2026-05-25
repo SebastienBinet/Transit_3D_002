@@ -1,5 +1,14 @@
 const LAT_M = 111_000;
 
+// Premier instant où p50 atteint 97 % de la longueur du tracé
+export function estimateArrival(trajectory, routeLength) {
+    const nearEnd = routeLength * 0.97;
+    for (const pt of trajectory) {
+        if (pt.p50 >= nearEnd) return pt.t;
+    }
+    return trajectory.at(-1)?.t ?? null;
+}
+
 export function interpolate(trajectory, t) {
     if (!trajectory.length) return null;
     if (t <= trajectory[0].t) return { ...trajectory[0] };

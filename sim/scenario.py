@@ -68,6 +68,7 @@ FREQ_L33 = 1200.0       # 20 min
 L33_P3_TIME = 560.0
 L17_P1_TIME = 450.0
 L17_P1_DWELL = 60.0    # durée d'arrêt à P1
+L33_P3_DWELL = 60.0    # durée d'arrêt à P3
 
 
 def build_scenario(L42_utile_speed: float) -> list[BusSpec]:

@@ -3,12 +3,12 @@ import math
 
 from sim.models import (
     Frame, VehicleState, PercentilePoint, TransferProbability,
-    PassengerState, PassengerCheckpoint,
+    PassengerState, PassengerCheckpoint, TransferWindow,
     RouteGeometry, Stop, LatLon, SimulationOutput,
 )
 from sim.scenario import (
     BusSpec, STOP_COORDS, LINE_STOPS, V_NOM, SIGMA_SPEED, T_PRIOR,
-    L33_P3_TIME, L17_P1_TIME, L17_P1_DWELL,
+    L33_P3_TIME, L17_P1_TIME, L17_P1_DWELL, L33_P3_DWELL,
     build_scenario, route_length, route_stop_progress,
 )
 
@@ -182,17 +182,36 @@ def _passenger_trajectory(cfg: dict) -> list[PassengerCheckpoint]:
 def _build_routes() -> list[RouteGeometry]:
     routes = []
     for line_id, stop_ids in LINE_STOPS.items():
+        progs = route_stop_progress(line_id)
         stops = [
             Stop(
                 stop_id=sid,
                 name=sid,
                 position=LatLon(lat=STOP_COORDS[sid][0], lon=STOP_COORDS[sid][1]),
+                progress_m=progs[i],
             )
-            for sid in stop_ids
+            for i, sid in enumerate(stop_ids)
         ]
         shape = [LatLon(lat=STOP_COORDS[sid][0], lon=STOP_COORDS[sid][1]) for sid in stop_ids]
-        routes.append(RouteGeometry(line_id=line_id, stops=stops, shape=shape))
+        routes.append(RouteGeometry(
+            line_id=line_id, stops=stops, shape=shape, length_m=route_length(line_id),
+        ))
     return routes
+
+
+def _transfer_windows(buses: list[BusSpec]) -> list[TransferWindow]:
+    L17 = next(b for b in buses if b.vehicle_id == "L17-util")
+    L33 = next(b for b in buses if b.vehicle_id == "L33-util")
+    p1_on_L17 = route_stop_progress("L17")[2]
+    p3_on_L33 = route_stop_progress("L33")[2]
+    t_L17 = L17.departure_time + p1_on_L17 / L17.speed_mps
+    t_L33 = L33.departure_time + p3_on_L33 / L33.speed_mps
+    return [
+        TransferWindow(stop_id="P1", connector_vehicle_id="L17-util",
+                       t_open=t_L17, t_close=t_L17 + L17_P1_DWELL),
+        TransferWindow(stop_id="P3", connector_vehicle_id="L33-util",
+                       t_open=t_L33, t_close=t_L33 + L33_P3_DWELL),
+    ]
 
 
 def simulate(scenario_id: int) -> SimulationOutput:
@@ -236,4 +255,5 @@ def simulate(scenario_id: int) -> SimulationOutput:
         routes=_build_routes(),
         frames=frames,
         passenger_trajectory=_passenger_trajectory(cfg),
+        transfer_windows=_transfer_windows(buses),
     )

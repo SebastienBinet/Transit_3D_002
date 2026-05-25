@@ -40,7 +40,7 @@ export function create(THREE, { scene, routes, transferWindows, worldPos, progre
             const connLine = connVehId.split('-')[0];
             const color = LINE_COLORS[connLine] ?? 0xffffff;
             const prob = connLine === 'L33' ? probL33 : probL17;
-            const opacity = Math.max(0.04, prob * 0.88);
+            const opacity = Math.max(0.12, prob * 0.95);
 
             const connVeh = frame.vehicles?.find(v => v.vehicle_id === connVehId);
             const connRoute = routes.find(r => r.line_id === connLine);
@@ -79,12 +79,20 @@ export function create(THREE, { scene, routes, transferWindows, worldPos, progre
 
             if (pts.length < 2) continue;
 
+            // Double-passe : couleur principale + liseré blanc pour l'épaisseur visuelle
             const line = new THREE.Line(
                 new THREE.BufferGeometry().setFromPoints(pts),
                 new THREE.LineBasicMaterial({ color, opacity, transparent: true }),
             );
             scene.add(line);
             objects.push(line);
+
+            const line2 = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: 0xffffff, opacity: opacity * 0.30, transparent: true }),
+            );
+            scene.add(line2);
+            objects.push(line2);
         }
     }
 

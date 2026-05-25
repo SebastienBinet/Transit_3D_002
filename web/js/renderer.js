@@ -143,7 +143,7 @@ export function init(canvas, config) {
             new THREE.BufferGeometry().setFromPoints(pts),
             new THREE.LineBasicMaterial({
                 color: LINE_COLORS[route.line_id] ?? 0x555555,
-                opacity: 0.35, transparent: true,
+                opacity: 0.60, transparent: true,
             }),
         ));
         for (const stop of route.stops) {
@@ -234,10 +234,10 @@ function drawFrame(frame, routes) {
     const suggestedConnector = probL33 >= SUGGEST_THRESHOLD ? 'L33-util' : 'L17-util';
 
     function vehicleStyle(vid) {
-        if (vid === 'L42-util') return { lineOp: 1.0, bandOp: 0.20, bold: true };
-        if (vid === suggestedConnector) return { lineOp: 0.95, bandOp: 0.18, bold: true };
-        if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.18, bandOp: 0.04, bold: false };
-        return { lineOp: 0.25, bandOp: 0.05, bold: false };
+        if (vid === 'L42-util') return { lineOp: 1.0, bandOp: 0.32, bold: true };
+        if (vid === suggestedConnector) return { lineOp: 1.0, bandOp: 0.28, bold: true };
+        if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.35, bandOp: 0.10, bold: false };
+        return { lineOp: 0.38, bandOp: 0.09, bold: false };
     }
 
     for (const vehicle of frame.vehicles) {
@@ -263,7 +263,7 @@ function drawFrame(frame, routes) {
 
             if (style.bold) {
                 const geo2 = new THREE.BufferGeometry().setFromPoints(p50pts);
-                const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.6, transparent: true });
+                const mat2 = new THREE.LineBasicMaterial({ color, opacity: 0.85, transparent: true });
                 const line2 = new THREE.Line(geo2, mat2);
                 scene.add(line2);
                 vehicleObjects.push(line2);
@@ -323,7 +323,7 @@ function drawFrame(frame, routes) {
 
             const connGeo = new THREE.BufferGeometry().setFromPoints([groundPos.clone(), arrivalPos.clone()]);
             const connLine = new THREE.Line(connGeo, new THREE.LineBasicMaterial({
-                color: 0xffffff, opacity: 0.2, transparent: true,
+                color: 0xffffff, opacity: 0.45, transparent: true,
             }));
             scene.add(connLine);
             vehicleObjects.push(connLine);

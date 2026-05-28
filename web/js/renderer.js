@@ -121,14 +121,16 @@ export function init(canvas, config) {
     const w = canvas.clientWidth || canvas.width || 800;
     const h = canvas.clientHeight || canvas.height || 600;
     camera = new THREE.PerspectiveCamera(55, w / h, 10, 50000);
-    camera.position.set(1500, 5000, 9000);
+    // Vue initiale : englobe O (-1556,0,0), G4 (778,0,-2220) et les drapeaux d'arrivée
+    // L33 (778,5100,-2220) et L17 (778,6000,-2220). Validé analytiquement (<18° de l'axe).
+    camera.position.set(1500, 7500, 9000);
 
     webglRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     webglRenderer.setSize(w, h, false);
     webglRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     controls = new OrbitControls(camera, webglRenderer.domElement);
-    controls.target.set(0, 4500, 0);
+    controls.target.set(-400, 3000, -1100);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.update();

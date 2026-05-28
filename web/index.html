@@ -164,8 +164,15 @@
           const dx = (connRoute.shape[i].lon - connRoute.shape[i-1].lon) * lm;
           rLen += Math.sqrt(dy*dy + dx*dx);
         }
-        for (const pt of connVeh.trajectory) {
-          if (pt.p50 >= rLen * 0.97) { tArrival = pt.t; break; }
+        const nearEnd = rLen * 0.97;
+        const traj = connVeh.trajectory;
+        for (let i = 0; i < traj.length; i++) {
+          if (traj[i].p50 >= nearEnd) {
+            if (i === 0) { tArrival = traj[0].t; break; }
+            const a = traj[i - 1], b = traj[i];
+            tArrival = a.t + (nearEnd - a.p50) / (b.p50 - a.p50) * (b.t - a.t);
+            break;
+          }
         }
       }
       const arrEl = document.getElementById('arrival');

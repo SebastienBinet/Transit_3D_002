@@ -41,14 +41,14 @@ def test_scenario2_memes_predictions_initiales():
 
 def test_scenario2_probabilite_L33_chute():
     out = simulate(2)
-    frame_300 = out.frames[60]  # T = 300 s (60 × 5 s)
+    frame_300 = out.frames[300]  # T = 300 s (300 × 1 s)
     prob = next(t.probability for t in frame_300.transfers if t.to_vehicle_id == "L33-util")
     assert prob < 0.20, f"prob L33 à T=300 s devrait être faible, reçu {prob}"
 
 
 def test_scenario1_probabilite_L33_reste_elevee():
     out = simulate(1)
-    frame_300 = out.frames[60]
+    frame_300 = out.frames[300]  # T = 300 s (300 × 1 s)
     prob = next(t.probability for t in frame_300.transfers if t.to_vehicle_id == "L33-util")
     assert prob >= 0.80, f"prob L33 à T=300 s cas 1 devrait rester élevée, reçu {prob}"
 

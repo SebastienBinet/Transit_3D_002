@@ -1,10 +1,18 @@
 const LAT_M = 111_000;
 
-// Premier instant où p50 atteint 97 % de la longueur du tracé
+// Premier instant où p50 atteint 97 % de la longueur du tracé.
+// Interpolation linéaire entre les deux points qui encadrent le seuil pour
+// éviter les sauts discrets causés par le pas TRAJ_STEP du simulateur.
 export function estimateArrival(trajectory, routeLength) {
     const nearEnd = routeLength * 0.97;
-    for (const pt of trajectory) {
-        if (pt.p50 >= nearEnd) return pt.t;
+    for (let i = 0; i < trajectory.length; i++) {
+        if (trajectory[i].p50 >= nearEnd) {
+            if (i === 0) return trajectory[0].t;
+            const a = trajectory[i - 1];
+            const b = trajectory[i];
+            const r = (nearEnd - a.p50) / (b.p50 - a.p50);
+            return a.t + r * (b.t - a.t);
+        }
     }
     return trajectory.at(-1)?.t ?? null;
 }

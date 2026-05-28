@@ -4,7 +4,7 @@
 
 const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
 
-export function create(THREE, { scene, routes, transferWindows, worldPos }) {
+export function create(THREE, { scene, routes, transferWindows, worldPos, registerTimed }) {
     const objects = [];
 
     function disposeObj(obj) {
@@ -69,9 +69,17 @@ export function create(THREE, { scene, routes, transferWindows, worldPos }) {
             const progOnL42 = stopProgressOnL42(win.stop_id);
             if (progOnL42 === null) continue;
 
+            // Interpolation linéaire pour éviter les sauts de TRAJ_STEP secondes
             let tEst = null;
-            for (const pt of l42.trajectory) {
-                if (pt.p50 >= progOnL42) { tEst = pt.t; break; }
+            for (let i = 0; i < l42.trajectory.length; i++) {
+                if (l42.trajectory[i].p50 >= progOnL42) {
+                    if (i === 0) { tEst = l42.trajectory[0].t; break; }
+                    const a = l42.trajectory[i - 1];
+                    const b = l42.trajectory[i];
+                    const r = (progOnL42 - a.p50) / (b.p50 - a.p50);
+                    tEst = a.t + r * (b.t - a.t);
+                    break;
+                }
             }
             if (tEst === null) continue;
 
@@ -90,6 +98,7 @@ export function create(THREE, { scene, routes, transferWindows, worldPos }) {
             );
             dot.position.copy(posEst);
             scene.add(dot); objects.push(dot);
+            registerTimed?.(dot, tEst);
 
             if (margin > 0) {
                 addLine([posEst.clone(), posClose.clone()], markerColor, 1.0);

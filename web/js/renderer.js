@@ -208,8 +208,10 @@ export function init(canvas, config) {
         webglRenderer.setSize(w, h, false);
     });
 
-    // vizCtx.scene = timeGroup : les modes viz ajoutent leurs objets dans l'espace-temps
-    vizCtx = { scene: timeGroup, routes, transferWindows: tw, worldPos, geoPos, progressToLatLon, estimateArrival };
+    // vizCtx.scene = timeGroup : les modes viz ajoutent leurs objets dans l'espace-temps.
+    // registerTimed(mesh, tAbsolu) : smooth Y entre les frames (sphères de marge, etc.)
+    function registerTimed(obj, tAbs) { timedObjects.push({ obj, tAbs }); }
+    vizCtx = { scene: timeGroup, routes, transferWindows: tw, worldPos, geoPos, progressToLatLon, estimateArrival, registerTimed };
 
     let _lastRafTs = 0;
     (function loop() {
@@ -230,12 +232,16 @@ export function init(canvas, config) {
         // Décalage temporel lisse : toute la scène espace-temps glisse sans saut
         timeGroup.position.y = -currentSimTime * TIME_SCALE;
 
-        // Sommet inférieur des lignes de connexion ancré à Y=0 monde
+        // Mise à jour lisse des objets temporels entre les frames
         for (const item of timedObjects) {
             if (item._isLine) {
+                // Ligne de connexion : sommet bas ancré à Y=0 monde
                 const pos = item.obj.geometry.attributes.position;
                 pos.setY(0, currentSimTime * TIME_SCALE);
                 pos.needsUpdate = true;
+            } else if (item.tAbs != null) {
+                // Objet enregistré par registerTimed : Y absolu calculé depuis tAbs
+                item.obj.position.y = item.tAbs * TIME_SCALE;
             }
         }
 
@@ -342,7 +348,7 @@ function drawFrame(frame, routes) {
         }
     }
 
-    // Sprite bonhomme (billboard) — suit le voyageur dans l'espace-temps
+    // Sprite bonhomme (billboard) — position géographique au sol (Y=0, dans scene)
     const passenger = frame.passenger;
     if (passenger) {
         const lineId = passenger.vehicle_id.split('-')[0];
@@ -352,10 +358,9 @@ function drawFrame(frame, routes) {
             if (ll) {
                 const color  = LINE_COLORS[lineId] ?? 0x4488ff;
                 const sprite = makePersonSprite(color);
-                // Y absolu ≈ frame.sim_time × TIME_SCALE → après décalage timeGroup : ≈ Y=0
-                sprite.position.copy(worldPos(ll.lat, ll.lon, frame.sim_time));
-                sprite.position.y += 250;
-                timeGroup.add(sprite); vehicleObjects.push(sprite);
+                sprite.position.copy(geoPos(ll.lat, ll.lon));
+                sprite.position.y += 250; // légèrement au-dessus du sol
+                scene.add(sprite); groundObjects.push(sprite);
             }
         }
     }

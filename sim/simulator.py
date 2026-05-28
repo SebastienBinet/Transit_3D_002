@@ -12,7 +12,7 @@ from sim.scenario import (
     build_scenario, route_length, route_stop_progress,
 )
 
-FRAME_INTERVAL = 5.0   # secondes entre frames
+FRAME_INTERVAL = 1.0   # secondes entre frames (1 s → 20 Hz à ×20, sans saut visible)
 HORIZON = 1800.0       # 30 min
 TRAJ_STEP = 60.0       # résolution de la trajectoire prédite (1 min)
 

@@ -5,6 +5,7 @@ import { progressToLatLon, estimateArrival, interpolate } from './interpolation.
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
 import { createAnimatedFlag } from './flag-animation.js';
+import { logEvent } from './diagnostics.js';
 
 const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
 const SUGGEST_THRESHOLD = 0.50;
@@ -210,13 +211,20 @@ export function init(canvas, config) {
     // vizCtx.scene = timeGroup : les modes viz ajoutent leurs objets dans l'espace-temps
     vizCtx = { scene: timeGroup, routes, transferWindows: tw, worldPos, geoPos, progressToLatLon, estimateArrival };
 
+    let _lastRafTs = 0;
     (function loop() {
         requestAnimationFrame(loop);
+        const now = performance.now();
+        const rafMs = _lastRafTs > 0 ? now - _lastRafTs : 0;
+        _lastRafTs = now;
+
         if (pendingFrame) {
             const t0 = performance.now();
+            const frameSim = pendingFrame.frame.sim_time;
             drawFrame(pendingFrame.frame, pendingFrame.routes);
             pendingFrame = null;
             lastDrawMs = performance.now() - t0;
+            logEvent('drawFrame', { frameSim, currentSimTime, drawMs: Math.round(lastDrawMs * 10) / 10 });
         }
 
         // Décalage temporel lisse : toute la scène espace-temps glisse sans saut
@@ -232,10 +240,12 @@ export function init(canvas, config) {
         }
 
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N
-        const realTime = performance.now() / 1000;
+        const realTime = now / 1000;
         for (const { handle, urgencyFn } of animatedFlags) {
             handle.update(realTime, urgencyFn());
         }
+
+        logEvent('tick', { simTime: currentSimTime, tGroupY: timeGroup.position.y, rafMs: Math.round(rafMs * 10) / 10 });
 
         controls.update();
         webglRenderer.render(scene, camera);

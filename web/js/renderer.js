@@ -106,6 +106,29 @@ function makePersonSprite(color) {
     return sprite;
 }
 
+// Sprite billboard affichant l'heure estimée de départ d'un bus depuis un arrêt.
+// Symbole ▶ + temps en format m:ss, couleur du circuit.
+// Placé à gauche (−X, côté Ouest) du point de départ dans le diagramme espace-temps.
+function makeDepartureLabel(THREE, timeS, color) {
+    const mins = Math.floor(timeS / 60);
+    const secs = Math.round(timeS % 60);
+    const text = `▶ ${mins}:${secs.toString().padStart(2, '0')}`;
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 64;
+    const ctx = c.getContext('2d');
+    const hex = '#' + color.toString(16).padStart(6, '0');
+    ctx.font = 'bold 28px monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = hex;
+    ctx.fillText(text, 250, 32);
+    const tex = new THREE.CanvasTexture(c);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(768, 192, 1);
+    return sprite;
+}
+
 // Icône d'autobus pour la vue carte (Y = 0)
 function makeBusIcon(color) {
     const emissive = new THREE.Color(color).multiplyScalar(0.35);
@@ -475,6 +498,23 @@ function drawFrame(frame, routes) {
         }));
         timeGroup.add(connLine); vehicleObjects.push(connLine);
         timedObjects.push({ obj: connLine, _isLine: true });
+    }
+
+    // Étiquettes de départ — une par fenêtre de correspondance (dans timeGroup)
+    for (const tw of twList) {
+        const connLine = tw.connector_vehicle_id.split('-')[0];
+        const color = LINE_COLORS[connLine] ?? 0xffffff;
+        let stopPos = null;
+        for (const route of routes) {
+            const s = route.stops.find(s => s.stop_id === tw.stop_id);
+            if (s) { stopPos = s.position; break; }
+        }
+        if (!stopPos) continue;
+        const gp = geoPos(stopPos.lat, stopPos.lon);
+        const label = makeDepartureLabel(THREE, tw.t_close, color);
+        // Offset de 500 m vers l'Ouest (−X) pour placer l'étiquette à gauche
+        label.position.set(gp.x - 500, tw.t_close * TIME_SCALE, gp.z);
+        timeGroup.add(label); vehicleObjects.push(label);
     }
 
     activeVizMode?.update(frame);

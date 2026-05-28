@@ -119,9 +119,9 @@ function makeDepartureLabel(THREE, timeS, color) {
     const hex = '#' + color.toString(16).padStart(6, '0');
     ctx.font = 'bold 28px monospace';
     ctx.textBaseline = 'middle';
-    ctx.textAlign = 'right';
+    ctx.textAlign = 'center';
     ctx.fillStyle = hex;
-    ctx.fillText(text, 250, 32);
+    ctx.fillText(text, 128, 32);
     const tex = new THREE.CanvasTexture(c);
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(mat);
@@ -309,21 +309,29 @@ function distM(ll1, ll2) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-// Retourne true si le passager (à la position actuelle de L42) peut encore
-// atteindre le circuit connecteur, soit via l'arrêt de correspondance (fenêtre ouverte),
-// soit en marchant jusqu'à un arrêt en aval que le bus n'a pas encore dépassé.
-function isCircuitReachable(T, l42Traj, l42Shape, connVeh, connRoute, tw) {
-    const l42Cur = interpolate(l42Traj, T);
-    if (!l42Cur) return true;
-    const l42Ll = progressToLatLon(l42Cur.p50, l42Shape);
-    if (!l42Ll) return true;
-
-    // 1. Arrêt de correspondance — fenêtre encore ouverte ?
+// Retourne true si le passager (sur L42) peut encore atteindre le circuit connecteur.
+// Cas 1 : L42 livre le passager à l'arrêt de correspondance avant la fermeture de la fenêtre.
+// Cas 2 (repli) : le passager peut marcher depuis sa position courante jusqu'à un arrêt
+//   en aval du bus connecteur avant que celui-ci ne l'atteigne.
+function isCircuitReachable(T, l42Traj, l42Shape, l42Route, connVeh, connRoute, tw) {
+    // Arrêt de correspondance sur la route du connecteur
     const tStop = connRoute.stops.find(s => s.stop_id === tw.stop_id);
-    if (tStop && T + distM(l42Ll, tStop.position) / WALKING_SPEED_MPS <= tw.t_close) return true;
+    if (!tStop) return true;
 
-    // 2. Arrêts en aval : le passager peut-il y arriver avant le bus ?
-    const transferProgress = tStop?.progress_m ?? 0;
+    // Cas 1 : L42 arrive à cet arrêt avant la fermeture de la fenêtre ?
+    const l42Stop = l42Route?.stops.find(s => s.stop_id === tw.stop_id);
+    if (l42Stop) {
+        const tL42AtStop = estimateTimeAtProgress(l42Traj, l42Stop.progress_m);
+        if (tL42AtStop !== null && tL42AtStop <= tw.t_close) return true;
+    }
+
+    // Cas 2 : marche à pied depuis la position actuelle de L42 vers un arrêt en aval
+    const l42Cur = interpolate(l42Traj, T);
+    if (!l42Cur) return false;
+    const l42Ll = progressToLatLon(l42Cur.p50, l42Shape);
+    if (!l42Ll) return false;
+
+    const transferProgress = tStop.progress_m;
     const connCur = interpolate(connVeh.trajectory, T);
     const connProgress = connCur?.p50 ?? 0;
     for (const stop of connRoute.stops) {
@@ -457,8 +465,9 @@ function drawFrame(frame, routes) {
 
         // Couleur du drapeau : rouge si le circuit est hors d'atteinte
         const twConn = twList.find(w => w.connector_vehicle_id === connId);
+        const l42Route = routes.find(r => r.line_id === 'L42');
         const reachable = (l42Veh && l42Shape && twConn)
-            ? isCircuitReachable(frame.sim_time, l42Veh.trajectory, l42Shape, connVeh, connRoute, twConn)
+            ? isCircuitReachable(frame.sim_time, l42Veh.trajectory, l42Shape, l42Route, connVeh, connRoute, twConn)
             : true;
         const flagColor = reachable ? null : 0xff2222;
 
@@ -512,8 +521,7 @@ function drawFrame(frame, routes) {
         if (!stopPos) continue;
         const gp = geoPos(stopPos.lat, stopPos.lon);
         const label = makeDepartureLabel(THREE, tw.t_close, color);
-        // Offset de 500 m vers l'Ouest (−X) pour placer l'étiquette à gauche
-        label.position.set(gp.x - 500, tw.t_close * TIME_SCALE, gp.z);
+        label.position.set(gp.x, tw.t_close * TIME_SCALE, gp.z);
         timeGroup.add(label); vehicleObjects.push(label);
     }
 

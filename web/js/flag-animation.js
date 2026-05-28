@@ -57,7 +57,7 @@ export function createAnimatedFlag(THREE, { phase = 0 } = {}) {
 
     function update(simTime, urgency = 0) {
         // Amplitude de base + bonus urgence (arrivée imminente = vent fort)
-        const amp = 8 + urgency * 42;
+        const amp = 20 + urgency * 35;
 
         // Direction du vent : vient toujours de gauche (+X) ;
         // windAngle fait varier le déplacement entre Z pur (0) et jusqu'à ±45° en Y.

@@ -112,7 +112,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
 
     const canvas = document.getElementById('canvas');
@@ -223,6 +223,7 @@
         }
         updateHud();
       }
+      if (player) updateSimTime(player.simTime);
       if (lastTs !== null) updateDebug(rawDeltaMs);
       lastTs = ts;
     }

@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { progressToLatLon, estimateArrival } from './interpolation.js';
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
+import { createAnimatedFlag } from './flag-animation.js';
 
 const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
 const SUGGEST_THRESHOLD = 0.50;
@@ -14,9 +15,10 @@ let scene, camera, webglRenderer, controls;
 let latCenter, lonCenter, lonM;
 let vehicleObjects = [];
 let nowPlane;
-let checkerTexture = null;
 let pendingFrame = null;
 export let lastDrawMs = 0;
+
+const animatedFlags = []; // { handle, urgencyFn } — mis à jour à 60 fps dans la boucle
 
 // Temps courant (lisse) — mis à jour à 60 fps depuis index.html
 let currentSimTime = 0;
@@ -52,48 +54,16 @@ function clearVehicles() {
         obj.traverse(child => {
             child.geometry?.dispose();
             if (child.material) {
-                if (child.material.map && child.material.map !== checkerTexture)
-                    child.material.map.dispose();
+                child.material.map?.dispose();
                 child.material.dispose();
             }
         });
     }
     vehicleObjects = [];
-    timedObjects.length = 0; // les objets suivis ont été supprimés
+    timedObjects.length = 0;
+    animatedFlags.length = 0;
 }
 
-function getCheckerTexture() {
-    if (checkerTexture) return checkerTexture;
-    const c = document.createElement('canvas');
-    c.width = c.height = 64;
-    const ctx = c.getContext('2d');
-    for (let y = 0; y < 4; y++)
-        for (let x = 0; x < 4; x++) {
-            ctx.fillStyle = (x + y) % 2 === 0 ? '#111' : '#fff';
-            ctx.fillRect(x * 16, y * 16, 16, 16);
-        }
-    checkerTexture = new THREE.CanvasTexture(c);
-    return checkerTexture;
-}
-
-function makeFinishFlag(position) {
-    const group = new THREE.Group();
-    const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(10, 10, 450, 6),
-        new THREE.MeshLambertMaterial({ color: 0xdddddd }),
-    );
-    pole.position.y = 225;
-    group.add(pole);
-    const flag = new THREE.Mesh(
-        new THREE.PlaneGeometry(220, 140),
-        new THREE.MeshBasicMaterial({ map: getCheckerTexture(), side: THREE.DoubleSide }),
-    );
-    flag.position.set(110, 450, 0);
-    flag.rotation.y = Math.PI / 6;
-    group.add(flag);
-    group.position.copy(position);
-    return group;
-}
 
 function addBoldLine(pts, color, opacity) {
     const g1 = new THREE.BufferGeometry().setFromPoints(pts);
@@ -222,6 +192,10 @@ export function init(canvas, config) {
                 item.obj.position.y = y;
             }
         }
+        // Animation des drapeaux par le vent (60 fps)
+        for (const { handle, urgencyFn } of animatedFlags) {
+            handle.update(currentSimTime, urgencyFn());
+        }
         controls.update();
         webglRenderer.render(scene, camera);
     })();
@@ -342,7 +316,7 @@ function drawFrame(frame, routes) {
         }
     }
 
-    // Drapeaux d'arrivée à G4 — position Y mise à jour en continu par timedObjects
+    // Drapeaux d'arrivée à G4 — animés par le vent, Y lisse via timedObjects
     for (const connId of ['L33-util', 'L17-util']) {
         const connVeh   = frame.vehicles.find(v => v.vehicle_id === connId);
         const connRoute = routes.find(r => r.line_id === connId.split('-')[0]);
@@ -350,26 +324,37 @@ function drawFrame(frame, routes) {
 
         const destStop = connRoute.stops.at(-1);
         const gp = geoPos(destStop.position.lat, destStop.position.lon);
-
-        // Drapeau au sol (fixe Y = 0)
-        const fg = makeFinishFlag(gp.clone());
-        scene.add(fg); vehicleObjects.push(fg);
+        const connIdx = connId === 'L33-util' ? 0 : 1; // pour les phases distinctes
 
         const tArrival = estimateArrival(connVeh.trajectory, connRoute.length_m);
+
+        // Drapeau au sol (Y = 0, fixe) — urgence proportionnelle à l'imminence
+        const fg = createAnimatedFlag(THREE, { phase: connIdx * 2.0 });
+        fg.group.position.copy(gp);
+        scene.add(fg.group); vehicleObjects.push(fg.group);
+        if (tArrival != null) {
+            animatedFlags.push({ handle: fg,
+                urgencyFn: () => Math.max(0, 1 - (tArrival - currentSimTime) / 300) });
+        }
+
         if (tArrival == null) continue;
 
-        // Drapeau à l'heure d'arrivée (descend lissément vers Y = 0)
-        const fa = makeFinishFlag(gp.clone());
-        scene.add(fa); vehicleObjects.push(fa);
-        timedObjects.push({ obj: fa, tEvent: tArrival });
+        // Drapeau à l'heure d'arrivée — descend lissément vers Y = 0
+        const fa = createAnimatedFlag(THREE, { phase: connIdx * 2.0 + 1.2 });
+        fa.group.position.copy(gp);
+        scene.add(fa.group); vehicleObjects.push(fa.group);
+        timedObjects.push({ obj: fa.group, tEvent: tArrival });
+        animatedFlags.push({ handle: fa,
+            urgencyFn: () => Math.max(0, 1 - (tArrival - currentSimTime) / 300) });
 
-        // Ligne verticale entre les deux drapeaux (mise à jour via timedObjects pour le sommet)
+        // Ligne verticale entre les deux drapeaux
         const linePts = [gp.clone(), gp.clone()];
         const lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-        const connLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.35, transparent: true }));
+        const connLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({
+            color: 0xffffff, opacity: 0.35, transparent: true,
+        }));
         scene.add(connLine); vehicleObjects.push(connLine);
-        // Stocker ref pour update lisse du sommet supérieur
-        timedObjects.push({ obj: connLine, tEvent: tArrival, _isLine: true, _geo: lineGeo, _gp: gp.clone() });
+        timedObjects.push({ obj: connLine, tEvent: tArrival, _isLine: true });
     }
 
     activeVizMode?.update(frame);

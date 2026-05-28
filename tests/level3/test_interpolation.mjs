@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { interpolate, progressToLatLon, estimateArrival } from '../../web/js/interpolation.js';
+import { interpolate, progressToLatLon, estimateArrival, estimateTimeAtProgress, progressToHeading } from '../../web/js/interpolation.js';
 
 const traj = [
     { t: 0,   p10: 0,   p50: 0,   p90: 0   },
@@ -112,4 +112,69 @@ test('progressToLatLon interpole à mi-segment', () => {
 test('progressToLatLon à la fin du segment', () => {
     const ll = progressToLatLon(segLen, shape);
     assert.ok(Math.abs(ll.lon - (-73.640)) < 1e-4);
+});
+
+// ── estimateTimeAtProgress ────────────────────────────────────────────────────
+
+const trajProg = [
+    { t:   0, p50:    0 },
+    { t:  60, p50:  300 },
+    { t: 120, p50:  600 },
+    { t: 180, p50:  900 },
+    { t: 240, p50: 1000 },
+];
+
+test('estimateTimeAtProgress retourne t=0 si seuil ≤ p50[0]', () => {
+    assert.equal(estimateTimeAtProgress(trajProg, 0), 0);
+});
+
+test('estimateTimeAtProgress interpole entre deux points', () => {
+    // Seuil 450 entre (t=120, p50=600) et (t=60, p50=300) → t=90
+    const t = estimateTimeAtProgress(trajProg, 450);
+    assert.ok(Math.abs(t - 90) < 0.01, `attendu 90, reçu ${t}`);
+});
+
+test('estimateTimeAtProgress retourne null si seuil hors horizon', () => {
+    assert.equal(estimateTimeAtProgress(trajProg, 99999), null);
+});
+
+// ── progressToHeading ────────────────────────────────────────────────────────
+
+const LAT_M_T = 111_000;
+const lat0_T  = 45.50;
+const lonM_T  = LAT_M_T * Math.cos(lat0_T * Math.PI / 180);
+
+// Tracé purement Est (même lat, lon croissant)
+const shapeEast = [
+    { lat: lat0_T, lon: -73.650 },
+    { lat: lat0_T, lon: -73.640 },
+];
+// Tracé purement Sud (même lon, lat décroissant)
+const shapeSouth = [
+    { lat: 45.530, lon: -73.640 },
+    { lat: 45.520, lon: -73.640 },
+];
+
+test('progressToHeading : tracé Est → rotation.y ≈ 0', () => {
+    const h = progressToHeading(100, shapeEast);
+    assert.ok(Math.abs(h) < 0.01, `attendu ≈0, reçu ${h}`);
+});
+
+test('progressToHeading : tracé Sud → rotation.y ≈ π/2', () => {
+    const h = progressToHeading(100, shapeSouth);
+    assert.ok(Math.abs(h - Math.PI / 2) < 0.01, `attendu ≈π/2, reçu ${h}`);
+});
+
+test('progressToHeading : tracé multi-segments, bon segment sélectionné', () => {
+    // Premier segment Est, second segment Sud
+    const shapeES = [
+        { lat: lat0_T, lon: -73.650 },
+        { lat: lat0_T, lon: -73.640 },  // 1 segment Est, ≈779 m
+        { lat: 45.490, lon: -73.640 },  // 2e segment Sud
+    ];
+    const segLen1 = 0.01 * lonM_T;
+    const hEast = progressToHeading(segLen1 / 2, shapeES);     // milieu du 1er segment
+    const hSouth = progressToHeading(segLen1 + 100, shapeES);  // dans le 2e segment
+    assert.ok(Math.abs(hEast) < 0.01,              `segment Est: attendu ≈0, reçu ${hEast}`);
+    assert.ok(Math.abs(hSouth - Math.PI / 2) < 0.01, `segment Sud: attendu ≈π/2, reçu ${hSouth}`);
 });

@@ -17,6 +17,20 @@ export function estimateArrival(trajectory, routeLength) {
     return trajectory.at(-1)?.t ?? null;
 }
 
+// Premier instant (interpolé) où p50 atteint exactement targetProgress.
+// Retourne null si le seuil est hors de l'horizon de la trajectoire.
+export function estimateTimeAtProgress(trajectory, targetProgress) {
+    for (let i = 0; i < trajectory.length; i++) {
+        if (trajectory[i].p50 >= targetProgress) {
+            if (i === 0) return trajectory[0].t;
+            const a = trajectory[i - 1], b = trajectory[i];
+            const r = (targetProgress - a.p50) / (b.p50 - a.p50);
+            return a.t + r * (b.t - a.t);
+        }
+    }
+    return null;
+}
+
 export function interpolate(trajectory, t) {
     if (!trajectory.length) return null;
     if (t <= trajectory[0].t) return { ...trajectory[0] };
@@ -52,4 +66,23 @@ export function progressToLatLon(progress_m, shape) {
         cum += seg;
     }
     return { ...shape.at(-1) };
+}
+
+// Angle THREE.js rotation.y pour aligner l'axe +X du bus sur le cap de marche.
+// dx = composante Est (m), dy = composante Nord (m) du segment actif.
+// rotation.y = atan2(-dy, dx) → 0 = Est, π/2 = Sud, ±π = Ouest, -π/2 = Nord.
+export function progressToHeading(progress_m, shape) {
+    if (!shape || shape.length < 2) return 0;
+    const lonM = LAT_M * Math.cos(shape[0].lat * Math.PI / 180);
+    let cum = 0;
+    for (let i = 1; i < shape.length; i++) {
+        const dy = (shape[i].lat - shape[i - 1].lat) * LAT_M;
+        const dx = (shape[i].lon - shape[i - 1].lon) * lonM;
+        const seg = Math.sqrt(dx * dx + dy * dy);
+        if (cum + seg >= progress_m || i === shape.length - 1) {
+            return Math.atan2(-dy, dx);
+        }
+        cum += seg;
+    }
+    return 0;
 }

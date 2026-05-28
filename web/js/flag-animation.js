@@ -32,7 +32,11 @@ function makeCheckerTex(THREE) {
  *     simTime : temps courant de la simulation (secondes)
  *     urgency : 0 (calme) → 1 (fort vent) — correspond à l'imminence de l'arrivée
  */
-export function createAnimatedFlag(THREE, { phase = 0 } = {}) {
+/**
+ * @param {number|null} opts.flagColor  Si non-null, tissu unicolore (ex. 0xff2222 = rouge).
+ *                                      Si null, texture damier bleu/jaune par défaut.
+ */
+export function createAnimatedFlag(THREE, { phase = 0, flagColor = null } = {}) {
     const group = new THREE.Group();
 
     // Mât
@@ -47,8 +51,9 @@ export function createAnimatedFlag(THREE, { phase = 0 } = {}) {
     // Copie immuable des positions de repos (avant toute déformation)
     const rest = flagGeo.attributes.position.array.slice();
 
-    const tex    = makeCheckerTex(THREE);
-    const flagMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    const flagMat = flagColor != null
+        ? new THREE.MeshBasicMaterial({ color: flagColor, side: THREE.DoubleSide })
+        : new THREE.MeshBasicMaterial({ map: makeCheckerTex(THREE), side: THREE.DoubleSide });
     const fabric  = new THREE.Mesh(flagGeo, flagMat);
     // Bord gauche du tissu attaché au sommet du mât
     // PlaneGeometry centré → décaler de FLAG_W/2 pour que x_local=−FLAG_W/2 soit sur le mât

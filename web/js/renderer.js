@@ -1,7 +1,7 @@
 // Seul fichier qui importe Three.js
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { progressToLatLon, estimateArrival, interpolate } from './interpolation.js';
+import { progressToLatLon, estimateArrival, estimateTimeAtProgress, interpolate, progressToHeading } from './interpolation.js';
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
 import { createAnimatedFlag } from './flag-animation.js';
@@ -11,6 +11,8 @@ const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
 const SUGGEST_THRESHOLD = 0.50;
 const TIME_SCALE = 5.0;
 const LAT_M = 111_000;
+const WALKING_SPEED_MPS = 1.4;   // vitesse de marche typique
+const MAX_ROT_PER_S = Math.PI / 2; // 90°/s — limite de rotation des icônes d'autobus
 
 let scene, camera, webglRenderer, controls;
 // timeGroup : groupe décalé en Y = −currentSimTime × TIME_SCALE à 60 fps.
@@ -26,6 +28,10 @@ let pendingFrame = null;
 export let lastDrawMs = 0;
 
 const animatedFlags = []; // { handle, urgencyFn } — animés à 60 fps en temps réel
+
+// Rotation actuelle par véhicule — persistante entre frames pour le rate-limiting
+const busRotations = new Map();
+let _prevDrawNow = 0;
 
 let currentSimTime = 0;
 export function updateSimTime(t) { currentSimTime = t; }
@@ -126,6 +132,8 @@ export function init(canvas, config) {
     lonCenter = (Math.min(...allLons) + Math.max(...allLons)) / 2;
     lonM = LAT_M * Math.cos(latCenter * Math.PI / 180);
     currentSimTime = 0;
+    busRotations.clear();
+    _prevDrawNow = 0;
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
@@ -271,9 +279,46 @@ export function renderFrame(frame, routes) {
     pendingFrame = { frame, routes };
 }
 
+// Distance euclidienne (m) entre deux {lat,lon} — précise pour <10 km
+function distM(ll1, ll2) {
+    const dy = (ll2.lat - ll1.lat) * LAT_M;
+    const dx = (ll2.lon - ll1.lon) * lonM;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Retourne true si le passager (à la position actuelle de L42) peut encore
+// atteindre le circuit connecteur, soit via l'arrêt de correspondance (fenêtre ouverte),
+// soit en marchant jusqu'à un arrêt en aval que le bus n'a pas encore dépassé.
+function isCircuitReachable(T, l42Traj, l42Shape, connVeh, connRoute, tw) {
+    const l42Cur = interpolate(l42Traj, T);
+    if (!l42Cur) return true;
+    const l42Ll = progressToLatLon(l42Cur.p50, l42Shape);
+    if (!l42Ll) return true;
+
+    // 1. Arrêt de correspondance — fenêtre encore ouverte ?
+    const tStop = connRoute.stops.find(s => s.stop_id === tw.stop_id);
+    if (tStop && T + distM(l42Ll, tStop.position) / WALKING_SPEED_MPS <= tw.t_close) return true;
+
+    // 2. Arrêts en aval : le passager peut-il y arriver avant le bus ?
+    const transferProgress = tStop?.progress_m ?? 0;
+    const connCur = interpolate(connVeh.trajectory, T);
+    const connProgress = connCur?.p50 ?? 0;
+    for (const stop of connRoute.stops) {
+        if (stop.progress_m <= Math.max(connProgress, transferProgress)) continue;
+        const walkTime = distM(l42Ll, stop.position) / WALKING_SPEED_MPS;
+        const busETA = estimateTimeAtProgress(connVeh.trajectory, stop.progress_m);
+        if (busETA !== null && T + walkTime <= busETA) return true;
+    }
+    return false;
+}
+
 function drawFrame(frame, routes) {
     // currentSimTime n'est PAS touché ici — seul updateSimTime() y écrit,
     // ce qui empêche les sauts inverses causés par l'écrasement de la valeur lisse.
+    const nowDraw = performance.now();
+    const wallDelta = _prevDrawNow > 0 ? (nowDraw - _prevDrawNow) / 1000 : 0;
+    _prevDrawNow = nowDraw;
+
     clearVehicles();
 
     const shapeByLine = Object.fromEntries(routes.map(r => [r.line_id, r.shape]));
@@ -343,6 +388,18 @@ function drawFrame(frame, routes) {
             if (ll) {
                 const icon = makeBusIcon(color);
                 icon.position.copy(geoPos(ll.lat, ll.lon));
+
+                // Cap : direction du tracé à la position courante, taux max 90°/s
+                const targetHeading = progressToHeading(cur.p50, shape);
+                const prevRot = busRotations.get(vehicle.vehicle_id) ?? targetHeading;
+                let rotDiff = targetHeading - prevRot;
+                while (rotDiff >  Math.PI) rotDiff -= 2 * Math.PI;
+                while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+                const maxDelta = MAX_ROT_PER_S * wallDelta;
+                const newRot = prevRot + Math.max(-maxDelta, Math.min(maxDelta, rotDiff));
+                busRotations.set(vehicle.vehicle_id, newRot);
+                icon.rotation.y = newRot;
+
                 scene.add(icon); groundObjects.push(icon);
             }
         }
@@ -366,10 +423,21 @@ function drawFrame(frame, routes) {
     }
 
     // Drapeaux d'arrivée à G4 — animés par le vent
+    const l42Veh   = frame.vehicles.find(v => v.vehicle_id === 'L42-util');
+    const l42Shape = shapeByLine['L42'];
+    const twList   = vizCtx?.transferWindows ?? [];
+
     for (const connId of ['L33-util', 'L17-util']) {
         const connVeh   = frame.vehicles.find(v => v.vehicle_id === connId);
         const connRoute = routes.find(r => r.line_id === connId.split('-')[0]);
         if (!connVeh || !connRoute) continue;
+
+        // Couleur du drapeau : rouge si le circuit est hors d'atteinte
+        const twConn = twList.find(w => w.connector_vehicle_id === connId);
+        const reachable = (l42Veh && l42Shape && twConn)
+            ? isCircuitReachable(frame.sim_time, l42Veh.trajectory, l42Shape, connVeh, connRoute, twConn)
+            : true;
+        const flagColor = reachable ? null : 0xff2222;
 
         const destStop = connRoute.stops.at(-1);
         const gp = geoPos(destStop.position.lat, destStop.position.lon);
@@ -377,7 +445,7 @@ function drawFrame(frame, routes) {
         const tArrival = estimateArrival(connVeh.trajectory, connRoute.length_m);
 
         // Drapeau au sol (scene, Y=0 permanent)
-        const fg = createAnimatedFlag(THREE, { phase: connIdx * 2.0 });
+        const fg = createAnimatedFlag(THREE, { phase: connIdx * 2.0, flagColor });
         fg.group.position.copy(gp);
         scene.add(fg.group); groundObjects.push(fg.group);
         if (tArrival != null) {
@@ -388,7 +456,7 @@ function drawFrame(frame, routes) {
         if (tArrival == null) continue;
 
         // Drapeau à l'heure d'arrivée (timeGroup, Y absolu = tArrival × TIME_SCALE)
-        const fa = createAnimatedFlag(THREE, { phase: connIdx * 2.0 + 1.2 });
+        const fa = createAnimatedFlag(THREE, { phase: connIdx * 2.0 + 1.2, flagColor });
         fa.group.position.set(gp.x, tArrival * TIME_SCALE, gp.z);
         timeGroup.add(fa.group); vehicleObjects.push(fa.group);
         animatedFlags.push({ handle: fa,

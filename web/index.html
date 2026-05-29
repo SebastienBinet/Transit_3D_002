@@ -96,6 +96,7 @@
       <option value="2">Cas 2 — repli</option>
       <option value="3">Cas 3 — cône de marche</option>
       <option value="4">Cas 4 — lignes STM réelles</option>
+      <option value="5">Cas 5 — STM simulation horaires</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -138,10 +139,45 @@
         await loadStmCase();
         return;
       }
+      if (scenarioId === '5') {
+        await loadStmSimulationCase();
+        return;
+      }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
       routes = data.routes;
       init(canvas, { routes, transferWindows: data.transfer_windows ?? [] });
       setVizMode(document.getElementById('viz-mode-select').value);
+      player = createPlayer(data.frames);
+      player.setSpeed(Number(document.getElementById('speed-select').value));
+      update();
+    }
+
+    async function loadStmSimulationCase() {
+      // Cas 5 : géométrie STM réelle + carte OSM + trajectoires depuis les
+      // horaires planifiés du GTFS (généré par build_scenario_stm.py).
+      let data, bounds;
+      try {
+        [data, bounds] = await Promise.all([
+          fetch('./data/scenario_stm_1.json').then(r => {
+            if (!r.ok) throw new Error(`scenario_stm_1.json indisponible (HTTP ${r.status})`);
+            return r.json();
+          }),
+          fetch('./data/map_bounds.json').then(r => r.json()),
+        ]);
+      } catch (err) {
+        alert(
+          `Le scénario STM n'a pas encore été généré.\n\n${err.message}\n\n` +
+          `Lancer le workflow data-sync.yml (onglet Actions) ou exécuter ` +
+          `localement : uv run python data/blocks/build_scenario_stm.py`
+        );
+        return;
+      }
+      routes = data.routes;
+      init(canvas, {
+        routes,
+        transferWindows: data.transfer_windows ?? [],
+        mapBackground: { url: './data/map_montreal.png', bounds },
+      });
       player = createPlayer(data.frames);
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
@@ -185,6 +221,10 @@
       document.getElementById('time-display').textContent =
         `T = ${Math.round(player.simTime)} s`;
       const transfers = player.frame?.transfers ?? [];
+      const isStoryMode = !!player.frame?.vehicles?.find(v => v.vehicle_id === 'L42-util');
+      const probDisplay = document.getElementById('prob-display');
+      probDisplay.style.display = isStoryMode ? '' : 'none';
+      if (!isStoryMode) return;
       const l33 = transfers.find(t => t.to_vehicle_id === 'L33-util');
       const l17 = transfers.find(t => t.to_vehicle_id === 'L17-util');
       document.getElementById('prob-l33').textContent =

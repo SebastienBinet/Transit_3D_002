@@ -95,6 +95,7 @@
       <option value="1">Cas 1 — nominal</option>
       <option value="2">Cas 2 — repli</option>
       <option value="3">Cas 3 — cône de marche</option>
+      <option value="4">Cas 4 — lignes STM réelles</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -133,6 +134,10 @@
         loadWalkCase();
         return;
       }
+      if (scenarioId === '4') {
+        await loadStmCase();
+        return;
+      }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
       routes = data.routes;
       init(canvas, { routes, transferWindows: data.transfer_windows ?? [] });
@@ -140,6 +145,23 @@
       player = createPlayer(data.frames);
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
+    }
+
+    async function loadStmCase() {
+      // Cas 4 : géométrie réelle des 6 lignes STM + fond de carte OSM.
+      // Pas encore de simulation horaire — affichage statique des tracés.
+      player = null;
+      const [routesData, bounds] = await Promise.all([
+        fetch('./data/routes_stm.json').then(r => r.json()),
+        fetch('./data/map_bounds.json').then(r => r.json()),
+      ]);
+      routes = routesData;
+      init(canvas, {
+        routes,
+        transferWindows: [],
+        mapBackground: { url: './data/map_montreal.png', bounds },
+      });
+      // Pas de mode viz spécifique — seuls les tracés au sol sont affichés
     }
 
     function loadWalkCase() {

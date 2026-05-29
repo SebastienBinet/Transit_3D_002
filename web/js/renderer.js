@@ -8,7 +8,12 @@ import { create as createWalkMode }   from './viz-mode-walk.js';
 import { createAnimatedFlag } from './flag-animation.js';
 import { logEvent } from './diagnostics.js';
 
-const LINE_COLORS = { L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44 };
+const LINE_COLORS = {
+    L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44,
+    // Lignes STM réelles
+    "51": 0x4488ff, "165": 0xff8844, "11":  0x44cc44,
+    "711": 0xdd44dd, "129": 0xffcc00, "155": 0x44ccdd,
+};
 const SUGGEST_THRESHOLD = 0.50;
 const TIME_SCALE = 5.0;
 const LAT_M = 111_000;
@@ -148,7 +153,7 @@ function makeBusIcon(color) {
 }
 
 export function init(canvas, config) {
-    const { routes, transferWindows: tw = [] } = config;
+    const { routes, transferWindows: tw = [], mapBackground = null } = config;
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));
@@ -187,6 +192,25 @@ export function init(canvas, config) {
     scene.add(sun);
 
     scene.add(new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36));
+
+    // Fond de carte raster optionnel (tuiles OSM composées) — sous tous les autres objets à Y=−1
+    if (mapBackground) {
+        const { url, bounds } = mapBackground;
+        const w_m = (bounds.lon_max - bounds.lon_min) * lonM;
+        const h_m = (bounds.lat_max - bounds.lat_min) * LAT_M;
+        const tex = new THREE.TextureLoader().load(url);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(w_m, h_m),
+            new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65 }),
+        );
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.set(
+            (bounds.lon_center - lonCenter) * lonM, -1,
+            -(bounds.lat_center - latCenter) * LAT_M,
+        );
+        scene.add(plane);
+    }
 
     // Tracés géographiques au sol (scene, Y=0 permanent)
     for (const route of routes) {

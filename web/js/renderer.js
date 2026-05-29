@@ -201,8 +201,9 @@ export function init(canvas, config) {
         tex.flipY = false; // sans flipY=false, le nord de l'image apparaît au sud en vue de dessus
         const plane = new THREE.Mesh(
             new THREE.PlaneGeometry(w_m, h_m),
-            new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65 }),
+            new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65, depthWrite: false }),
         );
+        plane.renderOrder = -1;
         plane.rotation.x = -Math.PI / 2;
         plane.position.set(
             (bounds.lon_center - lonCenter) * lonM, -1,

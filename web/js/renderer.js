@@ -191,8 +191,6 @@ export function init(canvas, config) {
     sun.position.set(3000, 8000, 5000);
     scene.add(sun);
 
-    scene.add(new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36));
-
     // Fond de carte raster optionnel (tuiles OSM composées) — sous tous les autres objets à Y=−1
     if (mapBackground) {
         const { url, bounds } = mapBackground;
@@ -200,6 +198,7 @@ export function init(canvas, config) {
         const h_m = (bounds.lat_max - bounds.lat_min) * LAT_M;
         const tex = new THREE.TextureLoader().load(url);
         tex.colorSpace = THREE.SRGBColorSpace;
+        tex.flipY = false; // sans flipY=false, le nord de l'image apparaît au sud en vue de dessus
         const plane = new THREE.Mesh(
             new THREE.PlaneGeometry(w_m, h_m),
             new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65 }),
@@ -207,9 +206,11 @@ export function init(canvas, config) {
         plane.rotation.x = -Math.PI / 2;
         plane.position.set(
             (bounds.lon_center - lonCenter) * lonM, -1,
-            -(bounds.lat_center - latCenter) * LAT_M,
+            (bounds.lat_center - latCenter) * LAT_M,
         );
         scene.add(plane);
+    } else {
+        scene.add(new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36));
     }
 
     // Tracés géographiques au sol (scene, Y=0 permanent)

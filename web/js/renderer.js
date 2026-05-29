@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { progressToLatLon, estimateArrival, estimateTimeAtProgress, interpolate, progressToHeading } from './interpolation.js';
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
+import { create as createWalkMode }   from './viz-mode-walk.js';
 import { createAnimatedFlag } from './flag-animation.js';
 import { logEvent } from './diagnostics.js';
 
@@ -296,6 +297,7 @@ export function setVizMode(name) {
     if (!vizCtx) return;
     if (name === 'windows') activeVizMode = createWindowsMode(THREE, vizCtx);
     else if (name === 'fork')    activeVizMode = createForkMode(THREE, vizCtx);
+    else if (name === 'walk')    activeVizMode = createWalkMode(THREE, { scene });
 }
 
 export function renderFrame(frame, routes) {

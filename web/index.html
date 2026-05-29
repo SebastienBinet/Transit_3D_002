@@ -94,6 +94,7 @@
     <select id="scenario-select">
       <option value="1">Cas 1 — nominal</option>
       <option value="2">Cas 2 — repli</option>
+      <option value="3">Cas 3 — cône de marche</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -114,13 +115,24 @@
   <script type="module">
     import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
+    import { create as createWalkMode } from './js/viz-mode-walk.js';
 
     const canvas = document.getElementById('canvas');
     let player = null;
     let routes = null;
     let lastTs = null;
+    let walkMode = null;
+
+    function teardownWalkMode() {
+      if (walkMode) { walkMode.dispose(); walkMode = null; }
+    }
 
     async function load(scenarioId) {
+      teardownWalkMode();
+      if (scenarioId === '3') {
+        loadWalkCase();
+        return;
+      }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
       routes = data.routes;
       init(canvas, { routes, transferWindows: data.transfer_windows ?? [] });
@@ -128,6 +140,21 @@
       player = createPlayer(data.frames);
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
+    }
+
+    function loadWalkCase() {
+      // Cas 3 : réseau inventé, pas de données de simulation.
+      // Petit réseau factice pour que init() calcule latCenter/lonCenter.
+      player = null;
+      routes = null;
+      // Symétrique autour de (45.508, -73.640) = LAT_REF/LON_REF du mode walk
+      const dummyRoute = {
+        line_id: 'WALK',
+        shape: [{ lat: 45.495, lon: -73.655 }, { lat: 45.521, lon: -73.625 }],
+        stops: [], length_m: 2800,
+      };
+      init(canvas, { routes: [dummyRoute], transferWindows: [] });
+      setVizMode('walk');
     }
 
     // Mise à jour DOM : appelée à chaque tick RAF pour un affichage fluide

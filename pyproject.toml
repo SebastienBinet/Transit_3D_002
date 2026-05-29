@@ -2,7 +2,11 @@
 name = "transit-3d"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.0"]
+dependencies = [
+    "pillow>=12.2.0",
+    "pydantic>=2.0",
+    "requests>=2.34.2",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

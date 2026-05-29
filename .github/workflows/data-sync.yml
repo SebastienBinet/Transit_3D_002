@@ -1,0 +1,51 @@
+name: Sync données STM + OSM
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Chaque lundi à 6h UTC (après les mises à jour hebdomadaires STM)
+  workflow_dispatch:        # Déclenchement manuel depuis l'onglet Actions
+
+permissions:
+  contents: write           # Pour pousser les fichiers mis à jour
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Installer les dépendances (incluant requests et Pillow)
+        run: uv add requests Pillow --quiet
+
+      - name: Télécharger le GTFS STM
+        run: uv run python data/blocks/fetch_gtfs.py --force
+
+      - name: Construire routes_stm.json
+        run: uv run python data/blocks/build_routes.py
+
+      - name: Télécharger les tuiles OSM
+        run: uv run python data/blocks/fetch_map_tiles.py
+
+      - name: Télécharger le réseau de rues OSM
+        run: uv run python data/blocks/fetch_osm.py
+
+      - name: Valider les sorties (tests L2)
+        run: uv run pytest tests/level2/ -v -k "stm" --no-header || true
+        # --no-header et || true : les tests L2 STM seront ajoutés progressivement
+
+      - name: Committer et pousser les données mises à jour
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add web/data/routes_stm.json web/data/map_bounds.json \
+                  web/data/map_montreal.png web/data/streets_montreal.json \
+                  web/data/build_info.json 2>/dev/null || true
+          git diff --staged --quiet && echo "Aucune modification." && exit 0
+          git commit -m "sync: données STM+OSM $(date -u +%Y-%m-%d)"
+          git push

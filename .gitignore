@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+
+# Cache données brutes externes — les fichiers traités dans web/data/ sont commités
+data/cache/

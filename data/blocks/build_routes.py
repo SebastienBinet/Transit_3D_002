@@ -1,0 +1,237 @@
+"""
+Construit web/data/routes_stm.json à partir du cache GTFS.
+Sélectionne le trip le plus long (en nombre d'arrêts) par direction pour
+les 6 lignes cibles. Produit une liste de RouteGeometry validée par Pydantic.
+
+Usage : uv run python data/blocks/build_routes.py
+"""
+from __future__ import annotations
+import csv
+import json
+import math
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+# ── Chemins ────────────────────────────────────────────────────────────────
+CACHE_DIR  = Path(__file__).parent.parent / "cache" / "gtfs"
+OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
+
+# ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
+TARGET_ROUTES = {"51", "11", "165", "711", "129", "155"}
+
+# Couleur hex par ligne (pour l'IHM — non stockée dans le JSON, référence pour renderer.js)
+LINE_COLORS_HEX = {
+    "51":  "#4488ff",   # bleu
+    "165": "#ff8844",   # orange
+    "11":  "#44cc44",   # vert
+    "711": "#dd44dd",   # violet
+    "129": "#ffcc00",   # jaune
+    "155": "#44ccdd",   # cyan
+}
+
+LAT_M = 111_000.0
+
+
+def read_csv(path: Path) -> list[dict]:
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance en mètres entre deux points lat/lon (sphère)."""
+    R = 6_371_000.0
+    φ1, φ2 = math.radians(lat1), math.radians(lat2)
+    dφ = math.radians(lat2 - lat1)
+    dλ = math.radians(lon2 - lon1)
+    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def progress_along_shape(
+    shape_pts: list[tuple[float, float]],
+    stop_lat: float,
+    stop_lon: float,
+) -> float:
+    """
+    Progression en mètres du début de la shape jusqu'au point le plus proche du stop.
+    Cherche le point de la shape le plus proche du stop, retourne la distance cumulée
+    jusqu'à ce point.
+    """
+    best_dist = float("inf")
+    best_cum  = 0.0
+    cum = 0.0
+    for i, (lat, lon) in enumerate(shape_pts):
+        d = haversine_m(stop_lat, stop_lon, lat, lon)
+        if d < best_dist:
+            best_dist = d
+            best_cum  = cum
+        if i + 1 < len(shape_pts):
+            cum += haversine_m(lat, lon, shape_pts[i + 1][0], shape_pts[i + 1][1])
+    return best_cum
+
+
+def build_routes() -> list[dict]:
+    for name in ("routes.txt", "trips.txt", "stop_times.txt", "stops.txt", "shapes.txt"):
+        if not (CACHE_DIR / name).exists():
+            print(f"ERREUR : {CACHE_DIR / name} introuvable. Lancer fetch_gtfs.py d'abord.", file=sys.stderr)
+            sys.exit(1)
+
+    # ── Charger les tables GTFS ────────────────────────────────────────────
+    routes_rows   = read_csv(CACHE_DIR / "routes.txt")
+    trips_rows    = read_csv(CACHE_DIR / "trips.txt")
+    st_rows       = read_csv(CACHE_DIR / "stop_times.txt")
+    stops_rows    = read_csv(CACHE_DIR / "stops.txt")
+    shapes_rows   = read_csv(CACHE_DIR / "shapes.txt")
+
+    # ── Index des stops : stop_id → {lat, lon, name} ───────────────────────
+    stop_info: dict[str, dict] = {}
+    for row in stops_rows:
+        stop_info[row["stop_id"]] = {
+            "lat":  float(row["stop_lat"]),
+            "lon":  float(row["stop_lon"]),
+            "name": row.get("stop_name", row["stop_id"]),
+        }
+
+    # ── Filtrer les route_id cibles ────────────────────────────────────────
+    target_route_ids: dict[str, str] = {}   # route_id → route_short_name
+    for row in routes_rows:
+        short = row.get("route_short_name", "").strip()
+        if short in TARGET_ROUTES:
+            target_route_ids[row["route_id"]] = short
+
+    if not target_route_ids:
+        print("ERREUR : aucune des lignes cibles trouvée dans routes.txt.", file=sys.stderr)
+        print(f"  Lignes cherchées : {TARGET_ROUTES}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Lignes trouvées : { {v: k for k, v in target_route_ids.items()} }")
+
+    # ── Trips par route_id ─────────────────────────────────────────────────
+    trips_by_route: dict[str, list[str]] = defaultdict(list)   # route_id → [trip_id]
+    shape_of_trip:  dict[str, str]       = {}                   # trip_id → shape_id
+    direction_of_trip: dict[str, str]    = {}
+    for row in trips_rows:
+        rid = row["route_id"]
+        if rid in target_route_ids:
+            tid = row["trip_id"]
+            trips_by_route[rid].append(tid)
+            shape_of_trip[tid]     = row.get("shape_id", "")
+            direction_of_trip[tid] = row.get("direction_id", "0")
+
+    # ── Stop sequences par trip_id ─────────────────────────────────────────
+    stop_seq_by_trip: dict[str, list[str]] = defaultdict(list)
+    for row in st_rows:
+        tid = row["trip_id"]
+        if tid in shape_of_trip:
+            stop_seq_by_trip[tid].append(row["stop_id"])
+
+    # ── Shape points par shape_id ──────────────────────────────────────────
+    shape_pts_by_id: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+    for row in shapes_rows:
+        sid = row["shape_id"]
+        shape_pts_by_id[sid].append((
+            float(row["shape_pt_lat"]),
+            float(row["shape_pt_lon"]),
+            float(row["shape_pt_sequence"]),
+        ))
+    # Trier par séquence
+    for sid in shape_pts_by_id:
+        shape_pts_by_id[sid].sort(key=lambda x: x[2])
+
+    # ── Sélectionner le trip représentatif par route+direction ───────────────
+    # Choisir le trip avec le plus grand nombre d'arrêts (le plus long trajet)
+    # On prend direction_id=0 uniquement pour simplifier (aller).
+    result_routes: list[dict] = []
+
+    for route_id, short_name in target_route_ids.items():
+        candidates = [
+            tid for tid in trips_by_route[route_id]
+            if direction_of_trip.get(tid) == "0" and len(stop_seq_by_trip.get(tid, [])) > 1
+        ]
+        if not candidates:
+            # Si pas de direction_id=0, prendre tous
+            candidates = [
+                tid for tid in trips_by_route[route_id]
+                if len(stop_seq_by_trip.get(tid, [])) > 1
+            ]
+        if not candidates:
+            print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short_name}")
+            continue
+
+        # Trip avec le plus d'arrêts
+        best_trip = max(candidates, key=lambda t: len(stop_seq_by_trip.get(t, [])))
+        shape_id  = shape_of_trip[best_trip]
+        stop_ids  = stop_seq_by_trip[best_trip]
+
+        print(f"  Ligne {short_name} : trip {best_trip}, {len(stop_ids)} arrêts, shape {shape_id}")
+
+        # Shape → liste (lat, lon)
+        raw_pts = shape_pts_by_id.get(shape_id, [])
+        if not raw_pts:
+            print(f"  AVERTISSEMENT : shape {shape_id} vide, ligne {short_name} ignorée")
+            continue
+        shape_latlon = [(pt[0], pt[1]) for pt in raw_pts]
+
+        # Longueur totale de la shape
+        shape_length_m = sum(
+            haversine_m(shape_latlon[i][0], shape_latlon[i][1],
+                        shape_latlon[i+1][0], shape_latlon[i+1][1])
+            for i in range(len(shape_latlon) - 1)
+        )
+
+        # Arrêts avec progress_m le long de la shape
+        stops_out = []
+        seen_stops: set[str] = set()
+        for sid in stop_ids:
+            if sid in seen_stops:
+                continue
+            seen_stops.add(sid)
+            info = stop_info.get(sid)
+            if not info:
+                continue
+            prog = progress_along_shape(shape_latlon, info["lat"], info["lon"])
+            stops_out.append({
+                "stop_id":    sid,
+                "name":       info["name"],
+                "position":   {"lat": info["lat"], "lon": info["lon"]},
+                "progress_m": round(prog, 1),
+            })
+
+        # Trier les arrêts par progress_m croissant
+        stops_out.sort(key=lambda s: s["progress_m"])
+
+        route_dict = {
+            "line_id":  short_name,
+            "stops":    stops_out,
+            "shape":    [{"lat": pt[0], "lon": pt[1]} for pt in shape_latlon],
+            "length_m": round(shape_length_m, 1),
+        }
+        result_routes.append(route_dict)
+
+    return result_routes
+
+
+def main() -> None:
+    print("Construction de routes_stm.json …")
+    routes = build_routes()
+    if not routes:
+        print("ERREUR : aucune route construite.", file=sys.stderr)
+        sys.exit(1)
+
+    # Validation Pydantic
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from sim.models import RouteGeometry
+    validated = [RouteGeometry.model_validate(r) for r in routes]
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(
+        json.dumps([r.model_dump() for r in validated], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Écrit : {OUTPUT}  ({OUTPUT.stat().st_size / 1024:.0f} KB)")
+    for r in validated:
+        print(f"  {r.line_id:>4} : {len(r.stops)} arrêts, {r.length_m/1000:.1f} km, {len(r.shape)} pts de shape")
+
+
+if __name__ == "__main__":
+    main()

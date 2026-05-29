@@ -35,6 +35,9 @@ jobs:
       - name: Télécharger le réseau de rues OSM
         run: uv run python data/blocks/fetch_osm.py
 
+      - name: Construire scenario_stm_1.json (horaires + incertitude)
+        run: uv run python data/blocks/build_scenario_stm.py
+
       - name: Valider les sorties (tests L2)
         run: uv run pytest tests/level2/ -v -k "stm" --no-header || true
         # --no-header et || true : les tests L2 STM seront ajoutés progressivement
@@ -45,7 +48,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add web/data/routes_stm.json web/data/map_bounds.json \
                   web/data/map_montreal.png web/data/streets_montreal.json \
-                  web/data/build_info.json 2>/dev/null || true
+                  web/data/scenario_stm_1.json web/data/build_info.json 2>/dev/null || true
           git diff --staged --quiet && echo "Aucune modification." && exit 0
           git commit -m "sync: données STM+OSM $(date -u +%Y-%m-%d)"
           git push

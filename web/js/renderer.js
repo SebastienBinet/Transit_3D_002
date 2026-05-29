@@ -13,6 +13,7 @@ const LINE_COLORS = {
     // Lignes STM réelles
     "51": 0x4488ff, "165": 0xff8844, "11":  0x44cc44,
     "711": 0xdd44dd, "129": 0xffcc00, "155": 0x44ccdd,
+    "66":  0xff4466, "144": 0x88ff44,
 };
 const SUGGEST_THRESHOLD = 0.50;
 const TIME_SCALE = 5.0;

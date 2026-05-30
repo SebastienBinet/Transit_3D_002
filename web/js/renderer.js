@@ -475,21 +475,24 @@ function drawFrame(frame, routes) {
             }
         }
 
-        // Bande d'incertitude p10–p90
+        // Bande d'incertitude p10–p50–p90 (3 colonnes : la ligne p50 est sur l'arête centrale)
         if (traj.length >= 2 && style.bandOp > 0.01) {
             const verts = [];
             for (const pt of traj) {
-                const lo = progressToLatLon(pt.p10, shape);
-                const hi = progressToLatLon(pt.p90, shape);
+                const lo  = progressToLatLon(pt.p10, shape);
+                const mid = progressToLatLon(pt.p50, shape);
+                const hi  = progressToLatLon(pt.p90, shape);
                 verts.push(worldPos(lo.lat, lo.lon, pt.t));
+                verts.push(worldPos(mid.lat, mid.lon, pt.t));
                 verts.push(worldPos(hi.lat, hi.lon, pt.t));
             }
             const positions = new Float32Array(verts.length * 3);
             verts.forEach((v, i) => { positions[i*3]=v.x; positions[i*3+1]=v.y; positions[i*3+2]=v.z; });
             const indices = [];
             for (let i = 0; i < traj.length - 1; i++) {
-                const a=i*2, b=i*2+1, c=i*2+2, d=i*2+3;
-                indices.push(a,b,c, b,d,c);
+                const a=i*3, b=i*3+1, c=i*3+2, d=(i+1)*3, e=(i+1)*3+1, f=(i+1)*3+2;
+                indices.push(a, b, d,  b, e, d);  // bande inférieure : p10 → p50
+                indices.push(b, c, e,  c, f, e);  // bande supérieure : p50 → p90
             }
             const geo = new THREE.BufferGeometry();
             geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));

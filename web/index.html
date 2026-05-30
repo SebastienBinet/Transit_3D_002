@@ -176,6 +176,7 @@
       init(canvas, {
         routes,
         transferWindows: data.transfer_windows ?? [],
+        stopEvents: data.stop_events ?? [],
         mapBackground: { url: './data/map_montreal.png', bounds },
       });
       player = createPlayer(data.frames);

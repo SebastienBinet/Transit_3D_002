@@ -58,10 +58,13 @@ def test_sched_before_first_returns_zero():
     assert sched(1000.0) == 0.0
 
 
-def test_sched_after_last_returns_length():
+def test_sched_after_last_returns_last_progress():
+    # Après le dernier arrêt connu, on retourne son progress (pas length_m).
+    # Cela évite un saut instantané vers le terminus quand le dernier arrêt
+    # n'est pas le terminus géographique du tracé.
     visits = [(1000.0, 1030.0, 0.0), (1300.0, 1330.0, 500.0)]
     sched = build_schedule_progress(visits, length_m=1000.0)
-    assert sched(2000.0) == 1000.0
+    assert sched(2000.0) == 500.0
 
 
 def test_sched_linear_between_stops():

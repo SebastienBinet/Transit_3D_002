@@ -34,21 +34,22 @@ def sigma_time_s(delta_t_s: float) -> float:
     return 3.0 * ((delta_t_s / 60.0) ** 0.301) * 60.0
 
 
-def build_fake_sched(route: dict, departure_offset_s: float) -> list[tuple[float, float, float]]:
-    """Retourne liste triée (t_arr, t_dep, progress_m) simulant un trip."""
+def build_fake_sched(route: dict, departure_offset_s: float) -> list[tuple[float, float, float, str]]:
+    """Retourne liste triée (t_arr, t_dep, progress_m, stop_id) simulant un trip."""
     visits = []
     speed = AVG_SPEED_MPS
     for stop in route["stops"]:
         t_arr = T0_SECONDS + departure_offset_s + stop["progress_m"] / speed
         t_dep = t_arr + DWELL_S
-        visits.append((t_arr, t_dep, stop["progress_m"]))
+        visits.append((t_arr, t_dep, stop["progress_m"], stop["stop_id"]))
     return visits
 
 
-def sched_fn(visits: list[tuple[float, float, float]], length_m: float):
+def sched_fn(visits: list[tuple], length_m: float):
     """Interpolation linéaire par morceaux entre les arrêts."""
     pts: list[tuple[float, float]] = []
-    for t_arr, t_dep, prog in visits:
+    for visit in visits:
+        t_arr, t_dep, prog = visit[0], visit[1], visit[2]
         if pts and t_arr <= pts[-1][0]:
             t_arr = pts[-1][0] + 0.001
         pts.append((t_arr, prog))
@@ -56,12 +57,13 @@ def sched_fn(visits: list[tuple[float, float, float]], length_m: float):
             pts.append((t_dep, prog))
 
     t_first, t_last = pts[0][0], pts[-1][0]
+    p_last = pts[-1][1]
 
     def sched(t: float) -> float:
         if t <= t_first:
             return 0.0
         if t >= t_last:
-            return length_m
+            return p_last  # rester au dernier arrêt connu
         lo, hi = 0, len(pts) - 1
         while hi - lo > 1:
             mid = (lo + hi) // 2
@@ -152,30 +154,36 @@ def main() -> None:
         T_sim = round(T_sim + FRAME_INTERVAL, 6)
 
     windows = []
+    stop_events = []
     for v in vehicles_meta:
-        for t_arr, t_dep, prog in v["visits"]:
-            sid_candidates = [
-                s["stop_id"] for s in next(
-                    r for r in routes_data if r["line_id"] == v["line_id"]
-                )["stops"]
-                if abs(s["progress_m"] - prog) < 0.1
-            ]
-            for sid in sid_candidates:
-                if len(stop_to_lines.get(sid, set())) < 2:
-                    continue
+        for t_arr, t_dep, prog, sid in v["visits"]:
+            # Fenêtres de correspondance (arrêts partagés entre ≥2 lignes)
+            if len(stop_to_lines.get(sid, set())) >= 2:
                 t_open  = t_arr - T0_SECONDS
                 t_close = t_dep - T0_SECONDS
-                if t_close < 0 or t_open > HORIZON_S:
-                    continue
-                t_open  = max(0.0, t_open)
-                t_close = min(HORIZON_S, max(t_close, t_open + 1.0))
-                windows.append({"stop_id": sid,
-                                 "connector_vehicle_id": v["vehicle_id"],
-                                 "t_open": round(t_open, 3),
-                                 "t_close": round(t_close, 3)})
+                if not (t_close < 0 or t_open > HORIZON_S):
+                    t_open  = max(0.0, t_open)
+                    t_close = min(HORIZON_S, max(t_close, t_open + 1.0))
+                    windows.append({"stop_id": sid,
+                                     "connector_vehicle_id": v["vehicle_id"],
+                                     "t_open": round(t_open, 3),
+                                     "t_close": round(t_close, 3)})
+            # Événements d'arrêt (tous les arrêts dans la fenêtre de simulation)
+            t_arr_rel = t_arr - T0_SECONDS
+            t_dep_rel = t_dep - T0_SECONDS
+            if not (t_dep_rel < 0 or t_arr_rel > HORIZON_S):
+                stop_events.append({
+                    "vehicle_id":  v["vehicle_id"],
+                    "line_id":     v["line_id"],
+                    "stop_id":     sid,
+                    "progress_m":  round(prog, 2),
+                    "t_arr":       round(t_arr_rel, 3),
+                    "t_dep":       round(t_dep_rel, 3),
+                })
 
     output = {"routes": routes_data, "frames": frames,
-              "passenger_trajectory": [], "transfer_windows": windows}
+              "passenger_trajectory": [], "transfer_windows": windows,
+              "stop_events": stop_events}
     print("Validation Pydantic …")
     SimulationOutput.model_validate(output)
 

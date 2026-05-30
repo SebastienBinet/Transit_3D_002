@@ -18,7 +18,7 @@ CACHE_DIR  = Path(__file__).parent.parent / "cache" / "gtfs"
 OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
 
 # ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
-TARGET_ROUTES = {"51", "11", "165", "711", "129", "155"}
+TARGET_ROUTES = {"51", "11", "165", "711", "129", "155", "66", "144"}
 
 # Couleur hex par ligne (pour l'IHM — non stockée dans le JSON, référence pour renderer.js)
 LINE_COLORS_HEX = {
@@ -28,6 +28,8 @@ LINE_COLORS_HEX = {
     "711": "#dd44dd",   # violet
     "129": "#ffcc00",   # jaune
     "155": "#44ccdd",   # cyan
+    "66":  "#ff4466",   # rose
+    "144": "#88ff44",   # vert lime
 }
 
 LAT_M = 111_000.0

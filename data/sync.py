@@ -2,7 +2,7 @@
 Point d'entrée unique pour synchroniser toutes les données externes.
 Lance les blocs dans l'ordre correct (certains dépendent d'autres).
 
-Usage : uv run python data/sync.py [--force-gtfs] [--skip-tiles] [--skip-osm]
+Usage : uv run python data/sync.py [--force-gtfs] [--skip-tiles] [--skip-osm] [--skip-scenario]
 """
 from __future__ import annotations
 import importlib.util
@@ -27,9 +27,10 @@ BLOCKS = Path(__file__).parent / "blocks"
 
 def main() -> None:
     args = sys.argv[1:]
-    force_gtfs  = "--force-gtfs"  in args
-    skip_tiles  = "--skip-tiles"  in args
-    skip_osm    = "--skip-osm"    in args
+    force_gtfs    = "--force-gtfs"    in args
+    skip_tiles    = "--skip-tiles"    in args
+    skip_osm      = "--skip-osm"      in args
+    skip_scenario = "--skip-scenario" in args
 
     # 1. Télécharger le GTFS STM
     run_module(BLOCKS / "fetch_gtfs.py", ["--force"] if force_gtfs else [])
@@ -48,6 +49,12 @@ def main() -> None:
         run_module(BLOCKS / "fetch_osm.py")
     else:
         print("\n⏭  fetch_osm.py ignoré (--skip-osm)")
+
+    # 5. Scénario de simulation STM (dépend du GTFS + routes_stm.json)
+    if not skip_scenario:
+        run_module(BLOCKS / "build_scenario_stm.py")
+    else:
+        print("\n⏭  build_scenario_stm.py ignoré (--skip-scenario)")
 
     print("\n✓ Synchronisation terminée.")
 

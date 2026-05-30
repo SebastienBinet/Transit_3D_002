@@ -13,6 +13,7 @@ const LINE_COLORS = {
     // Lignes STM réelles
     "51": 0x4488ff, "165": 0xff8844, "11":  0x44cc44,
     "711": 0xdd44dd, "129": 0xffcc00, "155": 0x44ccdd,
+    "66":  0xff4466, "144": 0x88ff44,
 };
 const SUGGEST_THRESHOLD = 0.50;
 const TIME_SCALE = 5.0;
@@ -201,8 +202,9 @@ export function init(canvas, config) {
         tex.flipY = false; // sans flipY=false, le nord de l'image apparaît au sud en vue de dessus
         const plane = new THREE.Mesh(
             new THREE.PlaneGeometry(w_m, h_m),
-            new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65 }),
+            new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65, depthWrite: false }),
         );
+        plane.renderOrder = -1;
         plane.rotation.x = -Math.PI / 2;
         plane.position.set(
             (bounds.lon_center - lonCenter) * lonM, -1,
@@ -382,8 +384,12 @@ function drawFrame(frame, routes) {
     const shapeByLine = Object.fromEntries(routes.map(r => [r.line_id, r.shape]));
     const probL33 = frame.transfers?.find(t => t.to_vehicle_id === 'L33-util')?.probability ?? 0;
     const suggestedConnector = probL33 >= SUGGEST_THRESHOLD ? 'L33-util' : 'L17-util';
+    // Mode "récit" : scénarios jouet avec L42/L17/L33 identifiés.
+    // Hors récit (ex. scenario STM réel), tous les véhicules reçoivent un style uniforme.
+    const isStoryMode = frame.vehicles.some(v => v.vehicle_id === 'L42-util');
 
     function vehicleStyle(vid) {
+        if (!isStoryMode) return { lineOp: 0.85, bandOp: 0.20, bold: false };
         if (vid === 'L42-util')          return { lineOp: 1.0, bandOp: 0.35, bold: true };
         if (vid === suggestedConnector)   return { lineOp: 1.0, bandOp: 0.30, bold: true };
         if (vid === 'L33-util' || vid === 'L17-util') return { lineOp: 0.40, bandOp: 0.12, bold: false };
@@ -480,10 +486,15 @@ function drawFrame(frame, routes) {
         }
     }
 
-    // Drapeaux d'arrivée à G4 — animés par le vent
+    // Drapeaux d'arrivée à G4 — animés par le vent. Réservé au mode récit (L42/L17/L33).
     const l42Veh   = frame.vehicles.find(v => v.vehicle_id === 'L42-util');
     const l42Shape = shapeByLine['L42'];
     const twList   = vizCtx?.transferWindows ?? [];
+
+    if (!isStoryMode) {
+        activeVizMode?.update(frame);
+        return;
+    }
 
     for (const connId of ['L33-util', 'L17-util']) {
         const connVeh   = frame.vehicles.find(v => v.vehicle_id === connId);

@@ -160,9 +160,9 @@ test('progressToHeading : tracé Est → rotation.y ≈ 0', () => {
     assert.ok(Math.abs(h) < 0.01, `attendu ≈0, reçu ${h}`);
 });
 
-test('progressToHeading : tracé Sud → rotation.y ≈ π/2', () => {
+test('progressToHeading : tracé Sud → rotation.y ≈ -π/2', () => {
     const h = progressToHeading(100, shapeSouth);
-    assert.ok(Math.abs(h - Math.PI / 2) < 0.01, `attendu ≈π/2, reçu ${h}`);
+    assert.ok(Math.abs(h + Math.PI / 2) < 0.01, `attendu ≈-π/2, reçu ${h}`);
 });
 
 test('progressToHeading : tracé multi-segments, bon segment sélectionné', () => {
@@ -175,6 +175,6 @@ test('progressToHeading : tracé multi-segments, bon segment sélectionné', () 
     const segLen1 = 0.01 * lonM_T;
     const hEast = progressToHeading(segLen1 / 2, shapeES);     // milieu du 1er segment
     const hSouth = progressToHeading(segLen1 + 100, shapeES);  // dans le 2e segment
-    assert.ok(Math.abs(hEast) < 0.01,              `segment Est: attendu ≈0, reçu ${hEast}`);
-    assert.ok(Math.abs(hSouth - Math.PI / 2) < 0.01, `segment Sud: attendu ≈π/2, reçu ${hSouth}`);
+    assert.ok(Math.abs(hEast) < 0.01,               `segment Est: attendu ≈0, reçu ${hEast}`);
+    assert.ok(Math.abs(hSouth + Math.PI / 2) < 0.01, `segment Sud: attendu ≈-π/2, reçu ${hSouth}`);
 });

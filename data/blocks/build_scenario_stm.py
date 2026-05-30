@@ -92,12 +92,13 @@ def build_schedule_progress(
 
     t_first = pts[0][0]
     t_last  = pts[-1][0]
+    p_last  = pts[-1][1]
 
     def sched(t: float) -> float:
         if t <= t_first:
             return 0.0
         if t >= t_last:
-            return length_m
+            return p_last  # rester au dernier arrêt connu, pas sauter à length_m
         # bisection sur pts (liste triée)
         lo, hi = 0, len(pts) - 1
         while hi - lo > 1:
@@ -352,12 +353,31 @@ def build_scenario() -> dict:
             })
     print(f"Fenêtres de correspondance émises : {len(windows)}")
 
+    # ── Événements d'arrêt (position + horaire planifié par arrêt) ───────────
+    stop_events: list[dict] = []
+    for v in selected:
+        for t_arr, t_dep, prog, sid in v["visits"]:
+            t_arr_rel = t_arr - T0_SECONDS
+            t_dep_rel = t_dep - T0_SECONDS
+            if t_dep_rel < 0 or t_arr_rel > HORIZON_S:
+                continue
+            stop_events.append({
+                "vehicle_id":  v["vehicle_id"],
+                "line_id":     v["line_id"],
+                "stop_id":     sid,
+                "progress_m":  round(prog, 2),
+                "t_arr":       round(t_arr_rel, 3),
+                "t_dep":       round(t_dep_rel, 3),
+            })
+    print(f"Événements d'arrêt émis : {len(stop_events)}")
+
     # ── Assembler et valider ───────────────────────────────────────────────
     output = {
         "routes": routes_data,
         "frames": frames,
         "passenger_trajectory": [],
         "transfer_windows": windows,
+        "stop_events": stop_events,
     }
     print("Validation Pydantic …")
     SimulationOutput.model_validate(output)

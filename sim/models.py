@@ -99,8 +99,18 @@ class TransferWindow(BaseModel):
     t_close: float  # heure de départ du connecteur
 
 
+class StopEvent(BaseModel):
+    vehicle_id: str
+    line_id: str
+    stop_id: str
+    progress_m: float
+    t_arr: float   # secondes depuis T0 (même référence que trajectory.t)
+    t_dep: float   # secondes depuis T0
+
+
 class SimulationOutput(BaseModel):
     routes: list[RouteGeometry]
     frames: list[Frame]
     passenger_trajectory: list[PassengerCheckpoint] = []
     transfer_windows: list[TransferWindow] = []
+    stop_events: list[StopEvent] = []

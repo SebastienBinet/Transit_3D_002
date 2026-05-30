@@ -52,7 +52,7 @@ let vizCtx = null;
 
 function geoPos(lat, lon) {
     return new THREE.Vector3(
-        (lon - lonCenter) * lonM, 0, (lat - latCenter) * LAT_M,
+        (lon - lonCenter) * lonM, 0, -(lat - latCenter) * LAT_M,
     );
 }
 
@@ -61,7 +61,7 @@ function worldPos(lat, lon, t) {
     return new THREE.Vector3(
         (lon - lonCenter) * lonM,
         t * TIME_SCALE,
-        (lat - latCenter) * LAT_M,
+        -(lat - latCenter) * LAT_M,
     );
 }
 
@@ -85,9 +85,11 @@ function clearVehicles() {
 function addBoldLine(pts, color, opacity) {
     const g1 = new THREE.BufferGeometry().setFromPoints(pts);
     const l1 = new THREE.Line(g1, new THREE.LineBasicMaterial({ color, opacity, transparent: true }));
+    l1.renderOrder = 1;
     timeGroup.add(l1); vehicleObjects.push(l1);
     const g2 = new THREE.BufferGeometry().setFromPoints(pts);
     const l2 = new THREE.Line(g2, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: opacity * 0.40, transparent: true }));
+    l2.renderOrder = 1;
     timeGroup.add(l2); vehicleObjects.push(l2);
 }
 
@@ -153,8 +155,27 @@ function makeBusIcon(color) {
     return group;
 }
 
+const DWELL_THRESHOLD_S = 300; // seuil dwell ≥ 5 min pour afficher arrivée + départ distincts
+
+function makeStopMarker(color) {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('▶', 32, 36);
+    const tex = new THREE.CanvasTexture(c);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(150, 150, 1);
+    sprite.renderOrder = 3;
+    return sprite;
+}
+
 export function init(canvas, config) {
-    const { routes, transferWindows: tw = [], mapBackground = null } = config;
+    const { routes, transferWindows: tw = [], mapBackground = null, stopEvents: se = [] } = config;
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));
@@ -182,7 +203,7 @@ export function init(canvas, config) {
     webglRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     controls = new OrbitControls(camera, webglRenderer.domElement);
-    controls.target.set(-400, 3000, -1100);
+    controls.target.set(-400, 3000, 1100);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.update();
@@ -199,7 +220,7 @@ export function init(canvas, config) {
         const h_m = (bounds.lat_max - bounds.lat_min) * LAT_M;
         const tex = new THREE.TextureLoader().load(url);
         tex.colorSpace = THREE.SRGBColorSpace;
-        tex.flipY = false; // sans flipY=false, le nord de l'image apparaît au sud en vue de dessus
+        // flipY = true (défaut) : image-nord → plan +Y → monde -Z = Nord ✓ (convention Z inversée)
         const plane = new THREE.Mesh(
             new THREE.PlaneGeometry(w_m, h_m),
             new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.65, depthWrite: false }),
@@ -208,7 +229,7 @@ export function init(canvas, config) {
         plane.rotation.x = -Math.PI / 2;
         plane.position.set(
             (bounds.lon_center - lonCenter) * lonM, -1,
-            (bounds.lat_center - latCenter) * LAT_M,
+            -(bounds.lat_center - latCenter) * LAT_M,
         );
         scene.add(plane);
     } else {
@@ -229,6 +250,41 @@ export function init(canvas, config) {
             );
             mesh.position.copy(geoPos(stop.position.lat, stop.position.lon));
             scene.add(mesh);
+        }
+    }
+
+    // Marqueurs d'arrêts planifiés dans le diagramme espace-temps (timeGroup)
+    for (const ev of se) {
+        const route = routes.find(r => r.line_id === ev.line_id);
+        if (!route) continue;
+        const color = LINE_COLORS[ev.line_id] ?? 0x888888;
+        const ll = progressToLatLon(ev.progress_m, route.shape);
+        if (!ll) continue;
+        const dwell = ev.t_dep - ev.t_arr;
+
+        if (dwell >= DWELL_THRESHOLD_S) {
+            // Attente longue (≥5 min) : ligne verticale + marqueurs d'arrivée et de départ
+            const posArr = worldPos(ll.lat, ll.lon, ev.t_arr);
+            const posDep = worldPos(ll.lat, ll.lon, ev.t_dep);
+            const dwellLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints([posArr, posDep]),
+                new THREE.LineBasicMaterial({ color, opacity: 0.85, transparent: true }),
+            );
+            dwellLine.renderOrder = 2;
+            timeGroup.add(dwellLine);
+            const mArr = makeStopMarker(color);
+            mArr.position.copy(posArr);
+            timeGroup.add(mArr);
+            const mDep = makeStopMarker(color);
+            mDep.position.copy(posDep);
+            timeGroup.add(mDep);
+        } else {
+            // Passage rapide : marqueur unique au milieu du passage
+            const tMid = (ev.t_arr + ev.t_dep) / 2;
+            const posMid = worldPos(ll.lat, ll.lon, tMid);
+            const m = makeStopMarker(color);
+            m.position.copy(posMid);
+            timeGroup.add(m);
         }
     }
 
@@ -414,6 +470,7 @@ function drawFrame(frame, routes) {
             } else {
                 const geo = new THREE.BufferGeometry().setFromPoints(p50pts);
                 const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, opacity: style.lineOp, transparent: true }));
+                line.renderOrder = 1;
                 timeGroup.add(line); vehicleObjects.push(line);
             }
         }
@@ -440,7 +497,7 @@ function drawFrame(frame, routes) {
             geo.computeVertexNormals();
             const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
                 color: style.bold ? 0xffffff : color,
-                transparent: true, opacity: style.bandOp, side: THREE.DoubleSide,
+                transparent: true, opacity: style.bandOp, side: THREE.DoubleSide, depthWrite: false,
             }));
             timeGroup.add(mesh); vehicleObjects.push(mesh);
         }

@@ -70,7 +70,8 @@ export function progressToLatLon(progress_m, shape) {
 
 // Angle THREE.js rotation.y pour aligner l'axe +X du bus sur le cap de marche.
 // dx = composante Est (m), dy = composante Nord (m) du segment actif.
-// rotation.y = atan2(-dy, dx) → 0 = Est, π/2 = Sud, ±π = Ouest, -π/2 = Nord.
+// Convention Z inversée (Nord = -Z) : rotation.y = atan2(dy, dx)
+// → 0 = Est, π/2 = Nord, ±π = Ouest, -π/2 = Sud.
 export function progressToHeading(progress_m, shape) {
     if (!shape || shape.length < 2) return 0;
     const lonM = LAT_M * Math.cos(shape[0].lat * Math.PI / 180);
@@ -80,7 +81,7 @@ export function progressToHeading(progress_m, shape) {
         const dx = (shape[i].lon - shape[i - 1].lon) * lonM;
         const seg = Math.sqrt(dx * dx + dy * dy);
         if (cum + seg >= progress_m || i === shape.length - 1) {
-            return Math.atan2(-dy, dx);
+            return Math.atan2(dy, dx);
         }
         cum += seg;
     }

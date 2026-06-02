@@ -162,27 +162,30 @@ def select_trip_for_route(
     trips_for_route: list[str],
     direction_of_trip: dict[str, str],
     stop_times_by_trip: dict[str, list[tuple[float, float, str]]],
+    prog_map: dict[str, float],
     line_id: str,
 ) -> str | None:
-    """Trip le mieux centré sur la fenêtre [T0, T0+HORIZON], direction 0.
-    Critère : trip dont la médiane temporelle est la plus proche du milieu de fenêtre."""
+    """Trip le mieux calé sur la fenêtre [T0, T0+HORIZON].
+    Critère 1 : maximum d'arrêts connus dans notre tracé (≥2 requis).
+    Critère 2 : médiane temporelle la plus proche du milieu de fenêtre.
+    Toutes les directions sont considérées (pas de filtre direction_id)."""
     T_mid = T0_SECONDS + HORIZON_S / 2.0
     best_trip = None
-    best_score = float("inf")
+    best_score: tuple | None = None
     for tid in trips_for_route:
-        if direction_of_trip.get(tid, "0") != "0":
-            continue
         visits = stop_times_by_trip.get(tid, [])
         if len(visits) < 2:
             continue
         t_first = visits[0][0]
         t_last  = visits[-1][0]
-        # Le trip doit avoir une intersection non vide avec la fenêtre
         if t_last < T0_SECONDS or t_first > T0_SECONDS + HORIZON_S:
             continue
+        n_known = sum(1 for _, _, sid in visits if sid in prog_map)
+        if n_known < 2:
+            continue
         t_median = 0.5 * (t_first + t_last)
-        score = abs(t_median - T_mid)
-        if score < best_score:
+        score = (-n_known, abs(t_median - T_mid))  # max arrêts connus, min écart temporel
+        if best_score is None or score < best_score:
             best_score = score
             best_trip = tid
     return best_trip
@@ -265,13 +268,13 @@ def build_scenario() -> dict:
 
     for route_id, short in target_route_ids.items():
         tids = trips_by_route.get(route_id, [])
-        chosen = select_trip_for_route(tids, direction_of_trip, stop_times_by_trip, short)
+        prog_map = progress_of_stop[short]
+        chosen = select_trip_for_route(tids, direction_of_trip, stop_times_by_trip, prog_map, short)
         if chosen is None:
             print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short}")
             continue
         # Convertir les visites en (t_arr, t_dep, progress_m, stop_id), en filtrant les
         # stops inconnus dans notre tracé (peut arriver si build_routes a choisi un autre trip)
-        prog_map = progress_of_stop[short]
         visits = stop_times_by_trip[chosen]
         visits_full: list[tuple[float, float, float, str]] = []
         for t_arr, t_dep, sid in visits:

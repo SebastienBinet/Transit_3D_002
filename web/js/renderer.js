@@ -12,11 +12,13 @@ const LINE_COLORS = {
     L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44,
     // Lignes STM réelles
     "51": 0x4488ff, "165": 0xff8844, "11":  0x44cc44,
-    "711": 0xdd44dd, "129": 0xffcc00, "155": 0x44ccdd,
+    "129": 0xffcc00, "155": 0x44ccdd,
     "66":  0xff4466, "144": 0x88ff44,
+    "124N": 0xff9900, "124S": 0xcc6600,
+    "480N": 0x9900cc, "480S": 0x6600aa,
 };
 const SUGGEST_THRESHOLD = 0.50;
-const TIME_SCALE = 5.0;
+const TIME_SCALE = 2.5;
 const LAT_M = 111_000;
 const WALKING_SPEED_MPS = 1.4;   // vitesse de marche typique
 const MAX_ROT_PER_S = Math.PI / 2; // 90°/s — limite de rotation des icônes d'autobus

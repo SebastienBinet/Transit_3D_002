@@ -45,8 +45,20 @@ def download_and_extract(force: bool = False) -> None:
 
     print(f"Téléchargement GTFS depuis {GTFS_URL} …")
     headers = {"User-Agent": "transit-3d/1.0 (github.com/SebastienBinet/Transit_3D_002)"}
-    resp = requests.get(GTFS_URL, headers=headers, timeout=120)
-    resp.raise_for_status()
+    last_exc: Exception | None = None
+    for attempt in range(1, 5):          # jusqu'à 4 tentatives
+        try:
+            resp = requests.get(GTFS_URL, headers=headers, timeout=120)
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            last_exc = exc
+            wait = 2 ** attempt          # 2 s, 4 s, 8 s
+            print(f"  Tentative {attempt} échouée ({exc.__class__.__name__}) — nouvelle tentative dans {wait} s …")
+            time.sleep(wait)
+    else:
+        print(f"ERREUR : impossible de télécharger le GTFS après 4 tentatives.", file=sys.stderr)
+        raise last_exc
     zip_path.write_bytes(resp.content)
     print(f"  {len(resp.content) / 1e6:.1f} MB téléchargés.")
 

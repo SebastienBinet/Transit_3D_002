@@ -28,6 +28,8 @@ FRAME_INTERVAL  = 2.0               # 0.5 Hz de frames produites (espacement tem
 TRAJ_STEP_S     = 60.0              # résolution interne de la trajectoire prédite
 N_TRAJ_STEPS    = int(HORIZON_S // TRAJ_STEP_S) + 1   # 31 points (t=0 inclus)
 
+LAT_M = 111_000.0
+
 
 # ── Modèle d'incertitude d'adhérence ───────────────────────────────────────
 def sigma_time_s(delta_t_s: float) -> float:
@@ -50,24 +52,60 @@ def parse_hms(hms: str) -> float:
     return int(h) * 3600 + int(m) * 60 + int(s)
 
 
-# ── Sélection du service weekday ───────────────────────────────────────────
-def pick_weekday_service(calendar_rows: list[dict], trips_rows: list[dict],
-                         target_route_ids: set[str]) -> str:
-    """Choisit le service_id avec le plus de trips sur les routes cibles,
-    parmi ceux actifs un lundi (monday=1)."""
+# ── Sélection du service weekday par route ─────────────────────────────────
+def pick_service_per_route(
+    calendar_rows: list[dict],
+    trips_rows: list[dict],
+    target_route_ids: set[str],
+) -> dict[str, str]:
+    """Retourne {route_id: meilleur_service_id} pour les routes cibles.
+    Chaque route peut utiliser un service_id différent ; on prend celui qui a
+    le plus de trips (lundi=1 dans calendar.txt)."""
     weekday_services = {r["service_id"] for r in calendar_rows
                         if r.get("monday", "0") == "1"}
     if not weekday_services:
         raise RuntimeError("Aucun service de semaine trouvé dans calendar.txt.")
 
-    counts: dict[str, int] = defaultdict(int)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
     for t in trips_rows:
-        if t.get("service_id") in weekday_services and t.get("route_id") in target_route_ids:
-            counts[t["service_id"]] += 1
-    if not counts:
-        # repli : prendre n'importe lequel des services weekday
-        return next(iter(weekday_services))
-    return max(counts.items(), key=lambda kv: kv[1])[0]
+        sid = t.get("service_id", "")
+        rid = t.get("route_id", "")
+        if sid in weekday_services and rid in target_route_ids:
+            counts[(rid, sid)] += 1
+
+    best: dict[str, tuple[str, int]] = {}
+    for (rid, sid), cnt in counts.items():
+        if rid not in best or cnt > best[rid][1]:
+            best[rid] = (sid, cnt)
+    return {rid: info[0] for rid, info in best.items()}
+
+
+# ── Snap d'un arrêt sur la shape de la ligne ──────────────────────────────
+def snap_stop_to_shape(
+    shape_pts: list[dict],
+    stop_lat: float,
+    stop_lon: float,
+) -> float:
+    """Retourne la distance cumulée (m) jusqu'au point de la shape le plus proche du stop."""
+    if not shape_pts:
+        return 0.0
+    lonM = LAT_M * math.cos(math.radians(shape_pts[0]["lat"]))
+    best_d2 = float("inf")
+    best_cum = 0.0
+    cum = 0.0
+    for i, pt in enumerate(shape_pts):
+        dy = (stop_lat - pt["lat"]) * LAT_M
+        dx = (stop_lon - pt["lon"]) * lonM
+        d2 = dx * dx + dy * dy
+        if d2 < best_d2:
+            best_d2 = d2
+            best_cum = cum
+        if i + 1 < len(shape_pts):
+            npt = shape_pts[i + 1]
+            dy2 = (npt["lat"] - pt["lat"]) * LAT_M
+            dx2 = (npt["lon"] - pt["lon"]) * lonM
+            cum += math.sqrt(dx2 * dx2 + dy2 * dy2)
+    return best_cum
 
 
 # ── Interpolation horaire → progress_m ─────────────────────────────────────
@@ -77,7 +115,7 @@ def build_schedule_progress(
 ) -> callable:
     """Retourne sched(t) → progress_m (linéaire par morceaux).
     trip_stop_visits = liste triée de (t_arrivée, t_départ, progress_m).
-    Avant le premier arrêt : 0. Après le dernier : length_m."""
+    Avant le premier arrêt : 0. Après le dernier : dernière progress connue."""
     if not trip_stop_visits:
         return lambda t: 0.0
     # Aplatir en points (t, p) : utilise arrivée puis départ (palier durant le dwell)
@@ -160,15 +198,12 @@ def build_vehicle_trajectory(sched: callable, length_m: float, T_sim_offset: flo
 # ── Sélection des trips représentatifs ─────────────────────────────────────
 def select_trip_for_route(
     trips_for_route: list[str],
-    direction_of_trip: dict[str, str],
     stop_times_by_trip: dict[str, list[tuple[float, float, str]]],
-    prog_map: dict[str, float],
-    line_id: str,
 ) -> str | None:
     """Trip le mieux calé sur la fenêtre [T0, T0+HORIZON].
-    Critère 1 : maximum d'arrêts connus dans notre tracé (≥2 requis).
+    Critère 1 : maximum d'arrêts (le plus long trajet actif dans la fenêtre).
     Critère 2 : médiane temporelle la plus proche du milieu de fenêtre.
-    Toutes les directions sont considérées (pas de filtre direction_id)."""
+    Toutes les directions sont considérées."""
     T_mid = T0_SECONDS + HORIZON_S / 2.0
     best_trip = None
     best_score: tuple | None = None
@@ -180,11 +215,8 @@ def select_trip_for_route(
         t_last  = visits[-1][0]
         if t_last < T0_SECONDS or t_first > T0_SECONDS + HORIZON_S:
             continue
-        n_known = sum(1 for _, _, sid in visits if sid in prog_map)
-        if n_known < 2:
-            continue
         t_median = 0.5 * (t_first + t_last)
-        score = (-n_known, abs(t_median - T_mid))  # max arrêts connus, min écart temporel
+        score = (-len(visits), abs(t_median - T_mid))  # max arrêts, min écart temporel
         if best_score is None or score < best_score:
             best_score = score
             best_trip = tid
@@ -196,7 +228,8 @@ def build_scenario() -> dict:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from sim.models import SimulationOutput
 
-    for name in ("routes.txt", "trips.txt", "stop_times.txt", "calendar.txt"):
+    required = ("routes.txt", "trips.txt", "stop_times.txt", "stops.txt", "calendar.txt")
+    for name in required:
         if not (CACHE_DIR / name).exists():
             print(f"ERREUR : {CACHE_DIR / name} introuvable.", file=sys.stderr)
             sys.exit(1)
@@ -209,18 +242,21 @@ def build_scenario() -> dict:
     line_ids = {r["line_id"] for r in routes_data}
     print(f"Routes chargées : {sorted(line_ids)}")
 
-    # Index : line_id → (length_m, stop_id → progress_m)
-    progress_of_stop: dict[str, dict[str, float]] = {}
-    length_of_line:   dict[str, float] = {}
-    for r in routes_data:
-        progress_of_stop[r["line_id"]] = {s["stop_id"]: s["progress_m"] for s in r["stops"]}
-        length_of_line[r["line_id"]] = r["length_m"]
+    shape_of_line:  dict[str, list[dict]] = {r["line_id"]: r["shape"]    for r in routes_data}
+    length_of_line: dict[str, float]      = {r["line_id"]: r["length_m"] for r in routes_data}
 
     # ── Charger les tables GTFS ────────────────────────────────────────────
     routes_rows = read_csv(CACHE_DIR / "routes.txt")
     trips_rows  = read_csv(CACHE_DIR / "trips.txt")
     st_rows     = read_csv(CACHE_DIR / "stop_times.txt")
+    stops_rows  = read_csv(CACHE_DIR / "stops.txt")
     cal_rows    = read_csv(CACHE_DIR / "calendar.txt")
+
+    # stop_id → (lat, lon)
+    stop_latlon: dict[str, tuple[float, float]] = {
+        r["stop_id"]: (float(r["stop_lat"]), float(r["stop_lon"]))
+        for r in stops_rows
+    }
 
     # route_short_name → route_id et inverse pour les lignes cibles
     target_route_ids: dict[str, str] = {}     # route_id → short
@@ -230,25 +266,28 @@ def build_scenario() -> dict:
             target_route_ids[r["route_id"]] = short
     target_route_id_set = set(target_route_ids.keys())
 
-    # ── Choisir le service weekday ─────────────────────────────────────────
-    service_id = pick_weekday_service(cal_rows, trips_rows, target_route_id_set)
-    print(f"Service weekday choisi : {service_id}")
+    # ── Choisir le meilleur service weekday par route ──────────────────────
+    service_per_route = pick_service_per_route(cal_rows, trips_rows, target_route_id_set)
+    services_used = sorted(set(service_per_route.values()))
+    print(f"Services weekday utilisés : {services_used}")
 
-    # ── Trips par route ────────────────────────────────────────────────────
+    # ── Trips par route (avec le bon service_id par route) ─────────────────
     trips_by_route: dict[str, list[str]] = defaultdict(list)
     direction_of_trip: dict[str, str]    = {}
     for t in trips_rows:
-        if t.get("service_id") != service_id:
+        rid = t.get("route_id", "")
+        expected_sid = service_per_route.get(rid)
+        if not expected_sid or t.get("service_id") != expected_sid:
             continue
-        if t["route_id"] in target_route_id_set:
-            trips_by_route[t["route_id"]].append(t["trip_id"])
-            direction_of_trip[t["trip_id"]] = t.get("direction_id", "0")
+        trips_by_route[rid].append(t["trip_id"])
+        direction_of_trip[t["trip_id"]] = t.get("direction_id", "0")
 
     # ── stop_times par trip → (t_arr, t_dep, stop_id) trié par stop_sequence ─
+    all_relevant_trips = {tid for tids in trips_by_route.values() for tid in tids}
     raw_st: dict[str, list[tuple[int, float, float, str]]] = defaultdict(list)
     for row in st_rows:
         tid = row["trip_id"]
-        if direction_of_trip.get(tid) is None:
+        if tid not in all_relevant_trips:
             continue
         try:
             seq    = int(row["stop_sequence"])
@@ -268,40 +307,53 @@ def build_scenario() -> dict:
 
     for route_id, short in target_route_ids.items():
         tids = trips_by_route.get(route_id, [])
-        prog_map = progress_of_stop[short]
-        chosen = select_trip_for_route(tids, direction_of_trip, stop_times_by_trip, prog_map, short)
+        chosen = select_trip_for_route(tids, stop_times_by_trip)
         if chosen is None:
             print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short}")
             continue
-        # Convertir les visites en (t_arr, t_dep, progress_m, stop_id), en filtrant les
-        # stops inconnus dans notre tracé (peut arriver si build_routes a choisi un autre trip)
+
+        # Snap tous les arrêts du trip sur la shape de la ligne
+        route_shape = shape_of_line[short]
         visits = stop_times_by_trip[chosen]
         visits_full: list[tuple[float, float, float, str]] = []
         for t_arr, t_dep, sid in visits:
-            if sid in prog_map:
-                visits_full.append((t_arr, t_dep, prog_map[sid], sid))
-        # Au moins 2 visites avec progress connu pour interpoler utilement
+            ll = stop_latlon.get(sid)
+            if ll is None:
+                continue
+            prog = snap_stop_to_shape(route_shape, ll[0], ll[1])
+            visits_full.append((t_arr, t_dep, prog, sid))
+
         if len(visits_full) < 2:
-            print(f"  AVERTISSEMENT : trip {chosen} (ligne {short}) — <2 arrêts connus dans le tracé, ignoré.")
+            print(f"  AVERTISSEMENT : trip {chosen} (ligne {short}) — <2 arrêts avec position, ignoré.")
             continue
-        # S'assurer que progress est non-décroissant (rare cas de monotonie inversée)
+
+        # Détection de direction inverse : si la progression est majoritairement
+        # décroissante, le trip roule dans le sens opposé à la shape → flip progress.
+        n_inc = sum(1 for i in range(1, len(visits_full))
+                    if visits_full[i][2] >= visits_full[i - 1][2])
+        if n_inc < len(visits_full) // 2:
+            L = length_of_line[short]
+            visits_full = [(ta, td, L - p, sid) for ta, td, p, sid in visits_full]
+
+        # S'assurer que t et progress sont triés et monotones
         visits_full.sort(key=lambda v: v[0])
         for i in range(1, len(visits_full)):
-            if visits_full[i][2] < visits_full[i-1][2]:
-                visits_full[i] = (visits_full[i][0], visits_full[i][1], visits_full[i-1][2], visits_full[i][3])
+            if visits_full[i][2] < visits_full[i - 1][2]:
+                visits_full[i] = (visits_full[i][0], visits_full[i][1],
+                                  visits_full[i - 1][2], visits_full[i][3])
 
         visits_prog = [(t_arr, t_dep, prog) for t_arr, t_dep, prog, _ in visits_full]
         sched = build_schedule_progress(visits_prog, length_of_line[short])
         vehicle_id = f"{short}-trip{len(selected) + 1}"
         selected.append({
             "vehicle_id": vehicle_id,
-            "line_id": short,
-            "length_m": length_of_line[short],
-            "sched": sched,
-            "visits": visits_full,
-            "trip_id": chosen,
+            "line_id":    short,
+            "length_m":   length_of_line[short],
+            "sched":      sched,
+            "visits":     visits_full,
+            "trip_id":    chosen,
         })
-        print(f"  Ligne {short:>4} : trip {chosen}, {len(visits_full)} arrêts connus, "
+        print(f"  Ligne {short:>4} : trip {chosen}, {len(visits_full)} arrêts, "
               f"{visits_full[0][0]/3600:.2f}h → {visits_full[-1][0]/3600:.2f}h")
 
     if not selected:

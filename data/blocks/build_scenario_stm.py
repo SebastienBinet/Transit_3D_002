@@ -201,26 +201,30 @@ def select_trip_for_route(
     stop_times_by_trip: dict[str, list[tuple[float, float, str]]],
 ) -> str | None:
     """Trip le mieux calé sur la fenêtre [T0, T0+HORIZON].
-    Critère 1 : maximum d'arrêts (le plus long trajet actif dans la fenêtre).
+    Critère 1 : maximum d'arrêts (le plus long trajet actif).
     Critère 2 : médiane temporelle la plus proche du milieu de fenêtre.
-    Toutes les directions sont considérées."""
+    Essaie d'abord la fenêtre stricte, puis élargit par tranches d'1 h (jusqu'à ±2 h)
+    pour les lignes dont les trips ne tombent pas exactement dans la fenêtre."""
     T_mid = T0_SECONDS + HORIZON_S / 2.0
-    best_trip = None
-    best_score: tuple | None = None
-    for tid in trips_for_route:
-        visits = stop_times_by_trip.get(tid, [])
-        if len(visits) < 2:
-            continue
-        t_first = visits[0][0]
-        t_last  = visits[-1][0]
-        if t_last < T0_SECONDS or t_first > T0_SECONDS + HORIZON_S:
-            continue
-        t_median = 0.5 * (t_first + t_last)
-        score = (-len(visits), abs(t_median - T_mid))  # max arrêts, min écart temporel
-        if best_score is None or score < best_score:
-            best_score = score
-            best_trip = tid
-    return best_trip
+    for slack in (0, 3600, 7200):
+        best_trip = None
+        best_score: tuple | None = None
+        for tid in trips_for_route:
+            visits = stop_times_by_trip.get(tid, [])
+            if len(visits) < 2:
+                continue
+            t_first = visits[0][0]
+            t_last  = visits[-1][0]
+            if t_last < T0_SECONDS - slack or t_first > T0_SECONDS + HORIZON_S + slack:
+                continue
+            t_median = 0.5 * (t_first + t_last)
+            score = (-len(visits), abs(t_median - T_mid))
+            if best_score is None or score < best_score:
+                best_score = score
+                best_trip = tid
+        if best_trip:
+            return best_trip
+    return None
 
 
 # ── Algorithme principal ───────────────────────────────────────────────────

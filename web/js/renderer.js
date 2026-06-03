@@ -43,6 +43,11 @@ let _prevDrawNow = 0;
 let currentSimTime = 0;
 export function updateSimTime(t) { currentSimTime = t; }
 
+// Affichage du ruban d'incertitude p10–p90. Désactivable depuis l'IHM pour
+// alléger la lecture (ne garde que la ligne p50).
+let showUncertainty = true;
+export function setShowUncertainty(v) { showUncertainty = !!v; }
+
 // timedObjects : uniquement les lignes de connexion dont le sommet inférieur
 // doit rester ancré à Y = 0 monde (bottom = currentSimTime × TIME_SCALE dans timeGroup)
 const timedObjects = [];
@@ -476,7 +481,7 @@ function drawFrame(frame, routes) {
         }
 
         // Bande d'incertitude p10–p50–p90 (3 colonnes : la ligne p50 est sur l'arête centrale)
-        if (traj.length >= 2 && style.bandOp > 0.01) {
+        if (showUncertainty && traj.length >= 2 && style.bandOp > 0.01) {
             const verts = [];
             for (const pt of traj) {
                 const lo  = progressToLatLon(pt.p10, shape);

@@ -23,20 +23,30 @@ jobs:
       - name: Installer les dépendances (incluant requests et Pillow)
         run: uv add requests Pillow --quiet
 
+      # Étapes séquentielles obligatoires : le GTFS doit être téléchargé avant
+      # de construire les tracés, et routes_stm.json est requis par les 3 étapes suivantes.
       - name: Télécharger le GTFS STM
         run: uv run python data/blocks/fetch_gtfs.py --force
 
       - name: Construire routes_stm.json
         run: uv run python data/blocks/build_routes.py
 
-      - name: Télécharger les tuiles OSM
-        run: uv run python data/blocks/fetch_map_tiles.py
-
-      - name: Télécharger le réseau de rues OSM
-        run: uv run python data/blocks/fetch_osm.py
-
-      - name: Construire scenario_stm_1.json (horaires + incertitude)
-        run: uv run python data/blocks/build_scenario_stm.py
+      # Ces 3 étapes sont indépendantes entre elles (elles ne lisent que
+      # routes_stm.json + le cache GTFS) et écrivent dans des fichiers distincts.
+      # On les lance en parallèle pour réduire le temps total du workflow.
+      - name: Tuiles OSM + réseau de rues + scénario (en parallèle)
+        run: |
+          uv run python data/blocks/fetch_map_tiles.py     > /tmp/tiles.log   2>&1 & P1=$!
+          uv run python data/blocks/fetch_osm.py           > /tmp/osm.log     2>&1 & P2=$!
+          uv run python data/blocks/build_scenario_stm.py  > /tmp/scenario.log 2>&1 & P3=$!
+          rc=0
+          wait $P1 || rc=1
+          wait $P2 || rc=1
+          wait $P3 || rc=1
+          echo "===== fetch_map_tiles.py ====="     && cat /tmp/tiles.log
+          echo "===== fetch_osm.py ====="           && cat /tmp/osm.log
+          echo "===== build_scenario_stm.py ====="  && cat /tmp/scenario.log
+          exit $rc
 
       - name: Valider les sorties (tests L2)
         run: uv run pytest tests/level2/ -v -k "stm" --no-header || true

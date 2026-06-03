@@ -140,28 +140,42 @@ def build_routes() -> list[dict]:
     for sid in shape_pts_by_id:
         shape_pts_by_id[sid].sort(key=lambda x: x[2])
 
-    # ── Sélectionner le trip représentatif par route+direction ───────────────
-    # Choisir le trip avec le plus grand nombre d'arrêts (le plus long trajet)
-    # On prend direction_id=0 uniquement pour simplifier (aller).
+    # ── Sélectionner le trip représentatif par route ──────────────────────────
+    # Préférer la direction dont le dernier arrêt est plus au sud que le premier
+    # (entrée vers le centre-ville, pointe du matin). Tiebreak : plus grand nombre d'arrêts.
     result_routes: list[dict] = []
 
     for route_id, short_name in target_route_ids.items():
         candidates = [
             tid for tid in trips_by_route[route_id]
-            if direction_of_trip.get(tid) == "0" and len(stop_seq_by_trip.get(tid, [])) > 1
+            if len(stop_seq_by_trip.get(tid, [])) > 1
         ]
-        if not candidates:
-            # Si pas de direction_id=0, prendre tous
-            candidates = [
-                tid for tid in trips_by_route[route_id]
-                if len(stop_seq_by_trip.get(tid, [])) > 1
-            ]
         if not candidates:
             print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short_name}")
             continue
 
-        # Trip avec le plus d'arrêts
-        best_trip = max(candidates, key=lambda t: len(stop_seq_by_trip.get(t, [])))
+        # Meilleur trip par direction (celui avec le plus d'arrêts dans chaque direction)
+        by_dir: dict[str, str] = {}
+        for tid in candidates:
+            d = direction_of_trip.get(tid, "0")
+            if d not in by_dir or len(stop_seq_by_trip[tid]) > len(stop_seq_by_trip[by_dir[d]]):
+                by_dir[d] = tid
+
+        def southbound_score(tid: str) -> float:
+            """Positif si le dernier arrêt est plus au sud (lat inférieure) que le premier."""
+            stops = stop_seq_by_trip.get(tid, [])
+            if len(stops) < 2:
+                return 0.0
+            first = stop_info.get(stops[0])
+            last  = stop_info.get(stops[-1])
+            if not first or not last:
+                return 0.0
+            return first["lat"] - last["lat"]
+
+        best_trip = max(
+            by_dir.values(),
+            key=lambda t: (southbound_score(t), len(stop_seq_by_trip.get(t, []))),
+        )
         shape_id  = shape_of_trip[best_trip]
         stop_ids  = stop_seq_by_trip[best_trip]
 

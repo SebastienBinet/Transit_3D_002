@@ -112,15 +112,20 @@
       <option value="windows">Fenêtres</option>
       <option value="fork">Fourche</option>
     </select>
+    <label id="p50-toggle" title="Afficher la ligne médiane p50"
+           style="display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none;">
+      <input type="checkbox" id="chk-p50" checked style="cursor:pointer;">
+      p50
+    </label>
     <label id="uncertainty-toggle" title="Afficher le ruban d'incertitude p10–p90"
            style="display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none;">
-      <input type="checkbox" id="chk-uncertainty" checked style="cursor:pointer;">
+      <input type="checkbox" id="chk-uncertainty" style="cursor:pointer;">
       p10–p90
     </label>
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50 } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
@@ -339,6 +344,10 @@
     document.getElementById('scenario-select').onchange = e => load(e.target.value);
     document.getElementById('viz-mode-select').onchange = e => {
       setVizMode(e.target.value);
+      update();
+    };
+    document.getElementById('chk-p50').onchange = e => {
+      setShowP50(e.target.checked);
       update();
     };
     document.getElementById('chk-uncertainty').onchange = e => {

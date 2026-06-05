@@ -163,6 +163,23 @@ test('model : tick s\'arrête en fin d\'horizon', () => {
     assert.equal(model.isPlaying, false);
 });
 
+test('model : un circuit sans passage garde sa route mais n\'ajoute aucun véhicule', () => {
+    const { index, circuits } = makeIndexAndCircuits(1000);
+    // Ajouter un circuit 480N sans aucun passage (trips vide)
+    circuits.push({
+        line_id: '480N', gtfs_direction_id: '0',
+        route: { line_id: '480N', stops: [], shape: [
+            { lat: 45.55, lon: -73.62 }, { lat: 45.58, lon: -73.60 }], length_m: 3000 },
+        trips: [],
+    });
+    const model = createScheduleModel({ index, circuits });
+    // La route 480N est présente (la ligne reste dessinée)
+    assert.ok(model.routes.some(r => r.line_id === '480N'));
+    // Aucun véhicule 480N à aucun instant
+    model.seekTo(0);
+    assert.ok(!model.frame.vehicles.some(v => v.line_id === '480N'));
+});
+
 test('model : un passage hors fenêtre n\'apparaît pas', () => {
     // t0 tel que 'late' (t0+5000) reste hors de [now, now+120] pour now ∈ [0,120]
     const model = createScheduleModel(makeIndexAndCircuits(0));

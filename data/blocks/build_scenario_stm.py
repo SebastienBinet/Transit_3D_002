@@ -276,10 +276,9 @@ def build_circuits() -> tuple[list[dict], dict]:
                 ],
             })
 
-        if not trips_out:
-            print(f"  AVERTISSEMENT : aucun passage pour {line_id}")
-            continue
-
+        # Émettre un fichier même sans passage (ex. 480N, express qui ne roule pas
+        # le matin) : trips vide mais format respecté, la géométrie reste affichée
+        # et l'emplacement est prêt pour les données d'après-midi à venir.
         trips_out.sort(key=lambda tr: tr["schedule"][0]["t_arr"])
 
         circuit = {
@@ -296,9 +295,12 @@ def build_circuits() -> tuple[list[dict], dict]:
             "file": f"circuits/{line_id}.json",
             "n_trips": len(trips_out),
         })
-        print(f"  {line_id:>5} : {len(trips_out)} passages "
-              f"({trips_out[0]['schedule'][0]['t_arr']/3600:.2f}h → "
-              f"{trips_out[-1]['schedule'][-1]['t_arr']/3600:.2f}h)")
+        if trips_out:
+            print(f"  {line_id:>5} : {len(trips_out)} passages "
+                  f"({trips_out[0]['schedule'][0]['t_arr']/3600:.2f}h → "
+                  f"{trips_out[-1]['schedule'][-1]['t_arr']/3600:.2f}h)")
+        else:
+            print(f"  {line_id:>5} : 0 passage dans la fenêtre — fichier émis avec trips vide")
 
     if not circuit_files:
         raise RuntimeError("Aucun circuit construit.")

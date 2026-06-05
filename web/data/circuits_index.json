@@ -10,11 +10,18 @@
   },
   "circuits": [
     {
-      "line_id": "11",
-      "gtfs_direction_id": null,
+      "line_id": "11N",
+      "gtfs_direction_id": "1",
       "color": "#44cc44",
-      "file": "circuits/11.json",
-      "n_trips": 5
+      "file": "circuits/11N.json",
+      "n_trips": 2
+    },
+    {
+      "line_id": "11S",
+      "gtfs_direction_id": "0",
+      "color": "#229922",
+      "file": "circuits/11S.json",
+      "n_trips": 3
     },
     {
       "line_id": "124N",
@@ -31,32 +38,60 @@
       "n_trips": 5
     },
     {
-      "line_id": "129",
-      "gtfs_direction_id": null,
+      "line_id": "129N",
+      "gtfs_direction_id": "1",
       "color": "#ffcc00",
-      "file": "circuits/129.json",
-      "n_trips": 19
+      "file": "circuits/129N.json",
+      "n_trips": 15
     },
     {
-      "line_id": "144",
-      "gtfs_direction_id": null,
+      "line_id": "129S",
+      "gtfs_direction_id": "0",
+      "color": "#cc9900",
+      "file": "circuits/129S.json",
+      "n_trips": 4
+    },
+    {
+      "line_id": "144N",
+      "gtfs_direction_id": "0",
       "color": "#88ff44",
-      "file": "circuits/144.json",
-      "n_trips": 13
+      "file": "circuits/144N.json",
+      "n_trips": 7
     },
     {
-      "line_id": "155",
-      "gtfs_direction_id": null,
+      "line_id": "144S",
+      "gtfs_direction_id": "1",
+      "color": "#55cc11",
+      "file": "circuits/144S.json",
+      "n_trips": 6
+    },
+    {
+      "line_id": "155N",
+      "gtfs_direction_id": "0",
       "color": "#44ccdd",
-      "file": "circuits/155.json",
-      "n_trips": 13
+      "file": "circuits/155N.json",
+      "n_trips": 7
     },
     {
-      "line_id": "165",
-      "gtfs_direction_id": null,
+      "line_id": "155S",
+      "gtfs_direction_id": "1",
+      "color": "#2299aa",
+      "file": "circuits/155S.json",
+      "n_trips": 6
+    },
+    {
+      "line_id": "165N",
+      "gtfs_direction_id": "1",
       "color": "#ff8844",
-      "file": "circuits/165.json",
-      "n_trips": 37
+      "file": "circuits/165N.json",
+      "n_trips": 15
+    },
+    {
+      "line_id": "165S",
+      "gtfs_direction_id": "0",
+      "color": "#cc5511",
+      "file": "circuits/165S.json",
+      "n_trips": 22
     },
     {
       "line_id": "480N",
@@ -73,18 +108,32 @@
       "n_trips": 9
     },
     {
-      "line_id": "51",
-      "gtfs_direction_id": null,
+      "line_id": "51N",
+      "gtfs_direction_id": "0",
       "color": "#4488ff",
-      "file": "circuits/51.json",
-      "n_trips": 67
+      "file": "circuits/51N.json",
+      "n_trips": 40
     },
     {
-      "line_id": "66",
-      "gtfs_direction_id": null,
+      "line_id": "51S",
+      "gtfs_direction_id": "1",
+      "color": "#2255cc",
+      "file": "circuits/51S.json",
+      "n_trips": 27
+    },
+    {
+      "line_id": "66N",
+      "gtfs_direction_id": "0",
       "color": "#ff4466",
-      "file": "circuits/66.json",
-      "n_trips": 10
+      "file": "circuits/66N.json",
+      "n_trips": 5
+    },
+    {
+      "line_id": "66S",
+      "gtfs_direction_id": "1",
+      "color": "#cc1133",
+      "file": "circuits/66S.json",
+      "n_trips": 5
     }
   ]
 }

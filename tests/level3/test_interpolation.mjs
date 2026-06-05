@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { interpolate, progressToLatLon, estimateArrival, estimateTimeAtProgress, progressToHeading } from '../../web/js/interpolation.js';
+import { interpolate, progressToLatLon, estimateArrival, estimateTimeAtProgress, progressToHeading, shapeCumulativeDist, densifyTrajFull } from '../../web/js/interpolation.js';
 
 const traj = [
     { t: 0,   p10: 0,   p50: 0,   p90: 0   },
@@ -177,4 +177,78 @@ test('progressToHeading : tracé multi-segments, bon segment sélectionné', () 
     const hSouth = progressToHeading(segLen1 + 100, shapeES);  // dans le 2e segment
     assert.ok(Math.abs(hEast) < 0.01,               `segment Est: attendu ≈0, reçu ${hEast}`);
     assert.ok(Math.abs(hSouth + Math.PI / 2) < 0.01, `segment Sud: attendu ≈-π/2, reçu ${hSouth}`);
+});
+
+// ── shapeCumulativeDist ───────────────────────────────────────────────────────
+
+// Tracé L (Est puis Nord) : coin à l'index 1
+const lat0_D = 45.50;
+const lonM_D = LAT_M * Math.cos(lat0_D * Math.PI / 180);
+const shapeL = [
+    { lat: lat0_D, lon: -73.650 },
+    { lat: lat0_D, lon: -73.640 },  // coin, ≈779 m à l'est
+    { lat: 45.510, lon: -73.640 },  // ≈1110 m au nord
+];
+const seg1 = 0.010 * lonM_D;
+const seg2 = 0.010 * LAT_M;
+
+test('shapeCumulativeDist : cum[0] = 0', () => {
+    const cum = shapeCumulativeDist(shapeL);
+    assert.equal(cum[0], 0);
+});
+
+test('shapeCumulativeDist : cum[1] ≈ longueur du premier segment', () => {
+    const cum = shapeCumulativeDist(shapeL);
+    assert.ok(Math.abs(cum[1] - seg1) < 1, `attendu ≈${seg1.toFixed(0)}, reçu ${cum[1].toFixed(0)}`);
+});
+
+test('shapeCumulativeDist : cum[2] ≈ somme des deux segments', () => {
+    const cum = shapeCumulativeDist(shapeL);
+    assert.ok(Math.abs(cum[2] - (seg1 + seg2)) < 1, `attendu ≈${(seg1+seg2).toFixed(0)}, reçu ${cum[2].toFixed(0)}`);
+});
+
+// ── densifyTrajFull ──────────────────────────────────────────────────────────
+
+const cumL = shapeCumulativeDist(shapeL);
+// Trajectoire : un seul pas qui enjambe le coin (cumL[1])
+const trajDensify = [
+    { t:   0, p10: 0,    p50: 0,    p90: 0     },
+    { t: 120, p10: 600,  p50: 900,  p90: 1200  },
+];
+
+test('densifyTrajFull : insère un point intermédiaire au coin', () => {
+    const d = densifyTrajFull(trajDensify, cumL);
+    assert.equal(d.length, 3);   // début + coin + fin
+});
+
+test('densifyTrajFull : le point intermédiaire a p50 = cumDist du coin', () => {
+    const d = densifyTrajFull(trajDensify, cumL);
+    assert.ok(Math.abs(d[1].p50 - cumL[1]) < 0.001);
+});
+
+test('densifyTrajFull : t du point intermédiaire entre t0 et t1', () => {
+    const d = densifyTrajFull(trajDensify, cumL);
+    assert.ok(d[1].t > 0 && d[1].t < 120);
+});
+
+test('densifyTrajFull : p10 ≤ p50 ≤ p90 au point intermédiaire', () => {
+    const d = densifyTrajFull(trajDensify, cumL);
+    assert.ok(d[1].p10 <= d[1].p50, `p10 ${d[1].p10} > p50 ${d[1].p50}`);
+    assert.ok(d[1].p50 <= d[1].p90, `p50 ${d[1].p50} > p90 ${d[1].p90}`);
+});
+
+test('densifyTrajFull : pas d\'insertion si coin hors intervalle p50', () => {
+    // Les deux points sont dans le premier segment (avant cumL[1])
+    const trajShort = [
+        { t: 0,  p10: 0,   p50: 0,   p90: 0   },
+        { t: 60, p10: 100, p50: 200, p90: 300  },
+    ];
+    const d = densifyTrajFull(trajShort, cumL);
+    assert.equal(d.length, 2);
+});
+
+test('densifyTrajFull : préserve les points originaux', () => {
+    const d = densifyTrajFull(trajDensify, cumL);
+    assert.equal(d[0], trajDensify[0]);
+    assert.equal(d[d.length - 1], trajDensify[1]);
 });

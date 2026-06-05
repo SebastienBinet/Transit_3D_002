@@ -1,7 +1,7 @@
 // Seul fichier qui importe Three.js
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { progressToLatLon, estimateArrival, estimateTimeAtProgress, interpolate, progressToHeading } from './interpolation.js';
+import { progressToLatLon, estimateArrival, estimateTimeAtProgress, interpolate, progressToHeading, shapeCumulativeDist, densifyTrajFull } from './interpolation.js';
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
 import { create as createWalkMode }   from './viz-mode-walk.js';
@@ -466,8 +466,13 @@ function drawFrame(frame, routes) {
         const traj  = vehicle.trajectory;
         const style = vehicleStyle(vehicle.vehicle_id);
 
+        // Densification : insère les sommets de shape entre chaque pas de 60 s pour que
+        // les lignes 3D suivent les virages de la route.
+        const cumDist = shapeCumulativeDist(shape);
+        const dtraj   = densifyTrajFull(traj, cumDist);
+
         // Trajectoire p50 (dans timeGroup, Y absolu)
-        const p50pts = traj.map(pt => {
+        const p50pts = dtraj.map(pt => {
             const ll = progressToLatLon(pt.p50, shape);
             return worldPos(ll.lat, ll.lon, pt.t);
         });
@@ -483,9 +488,9 @@ function drawFrame(frame, routes) {
         }
 
         // Bande d'incertitude p10–p50–p90 (3 colonnes : la ligne p50 est sur l'arête centrale)
-        if (showUncertainty && traj.length >= 2 && style.bandOp > 0.01) {
+        if (showUncertainty && dtraj.length >= 2 && style.bandOp > 0.01) {
             const verts = [];
-            for (const pt of traj) {
+            for (const pt of dtraj) {
                 const lo  = progressToLatLon(pt.p10, shape);
                 const mid = progressToLatLon(pt.p50, shape);
                 const hi  = progressToLatLon(pt.p90, shape);
@@ -496,7 +501,7 @@ function drawFrame(frame, routes) {
             const positions = new Float32Array(verts.length * 3);
             verts.forEach((v, i) => { positions[i*3]=v.x; positions[i*3+1]=v.y; positions[i*3+2]=v.z; });
             const indices = [];
-            for (let i = 0; i < traj.length - 1; i++) {
+            for (let i = 0; i < dtraj.length - 1; i++) {
                 const a=i*3, b=i*3+1, c=i*3+2, d=(i+1)*3, e=(i+1)*3+1, f=(i+1)*3+2;
                 indices.push(a, b, d,  b, e, d);  // bande inférieure : p10 → p50
                 indices.push(b, c, e,  c, f, e);  // bande supérieure : p50 → p90

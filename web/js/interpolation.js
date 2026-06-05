@@ -47,6 +47,46 @@ export function interpolate(trajectory, t) {
     };
 }
 
+// Pre-computes cumulative distances (metres) at each shape vertex.
+export function shapeCumulativeDist(shape) {
+    if (!shape.length) return new Float64Array(0);
+    const lonM = LAT_M * Math.cos(shape[0].lat * Math.PI / 180);
+    const cum = new Float64Array(shape.length);
+    for (let i = 1; i < shape.length; i++) {
+        const dy = (shape[i].lat - shape[i - 1].lat) * LAT_M;
+        const dx = (shape[i].lon - shape[i - 1].lon) * lonM;
+        cum[i] = cum[i - 1] + Math.sqrt(dy * dy + dx * dx);
+    }
+    return cum;
+}
+
+// Inserts intermediate waypoints at shape-vertex boundaries between consecutive
+// trajectory points so that 3D lines follow road corners precisely.
+// Corner timing is determined by p50; p10/p90 are linearly interpolated in time.
+export function densifyTrajFull(traj, cumDist) {
+    const out = [];
+    for (let i = 0; i < traj.length; i++) {
+        out.push(traj[i]);
+        if (i + 1 >= traj.length) break;
+        const a = traj[i], b = traj[i + 1];
+        const p1 = a.p50, p2 = b.p50;
+        if (p2 <= p1) continue;
+        for (let k = 1; k < cumDist.length - 1; k++) {
+            const pc = cumDist[k];
+            if (pc > p1 && pc < p2) {
+                const r = (pc - p1) / (p2 - p1);
+                out.push({
+                    t:   a.t   + r * (b.t   - a.t),
+                    p10: a.p10 + r * (b.p10 - a.p10),
+                    p50: pc,
+                    p90: a.p90 + r * (b.p90 - a.p90),
+                });
+            }
+        }
+    }
+    return out;
+}
+
 export function progressToLatLon(progress_m, shape) {
     if (!shape.length) return null;
     if (progress_m <= 0) return { ...shape[0] };

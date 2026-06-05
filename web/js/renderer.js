@@ -512,8 +512,10 @@ function drawFrame(frame, routes) {
             timeGroup.add(mesh); vehicleObjects.push(mesh);
         }
 
-        // Icône d'autobus au niveau de la carte (scene, Y=0) — position actuelle interpolée
-        const cur = interpolate(traj, frame.sim_time);
+        // Icône d'autobus au niveau de la carte (scene, Y=0) — position actuelle interpolée.
+        // On utilise currentSimTime (live, lissé) plutôt que frame.sim_time (discret) :
+        // l'icône avance en continu même si le cône n'est rebâti que tous les frame_interval.
+        const cur = interpolate(traj, Math.max(currentSimTime, frame.sim_time));
         if (cur) {
             const ll = progressToLatLon(cur.p50, shape);
             if (ll) {

@@ -1,10 +1,16 @@
 """
-Construit web/data/scenario_stm_1.json à partir des horaires GTFS de la STM.
+Construit les fichiers circuit (un par circuit-direction) + l'index à partir des
+horaires GTFS de la STM.
 
-Pour chaque ligne cible, sélectionne 3 trips consécutifs (précédent, central, suivant)
-actifs autour de la fenêtre de simulation (pointe du matin 7h00–8h00) et produit
-une trajectoire espace-temps p10/p50/p90 par interpolation des horaires planifiés,
-avec incertitude d'adhérence σ(Δt) = 3·Δt_min^0.301 minutes.
+Schéma scalable (voir DECISIONS.md §5) : chaque passage (trip) est stocké UNE fois
+sous forme d'horaire (t_arr, t_dep, progress_m), pas comme des frames redondantes.
+Le cône d'incertitude p10/p50/p90 est reconstruit côté visualizer (web/js/scenario-model.js)
+à partir de l'horaire et du modèle σ partagé. Tient à l'échelle de tous les circuits,
+toutes les directions, toute la semaine (chargement paresseux par fichier).
+
+Sorties :
+  web/data/circuits/{line_id}.json   — géométrie + tous les passages de la fenêtre
+  web/data/circuits_index.json       — liste des circuits + paramètres + modèle σ
 
 Usage : uv run python data/blocks/build_scenario_stm.py
 """
@@ -17,27 +23,36 @@ from collections import defaultdict
 from pathlib import Path
 
 # ── Chemins ────────────────────────────────────────────────────────────────
-CACHE_DIR = Path(__file__).parent.parent / "cache" / "gtfs"
-ROUTES_IN = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
-OUTPUT    = Path(__file__).parent.parent.parent / "web" / "data" / "scenario_stm_1.json"
+CACHE_DIR   = Path(__file__).parent.parent / "cache" / "gtfs"
+ROUTES_IN   = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
+OUTPUT_DIR  = Path(__file__).parent.parent.parent / "web" / "data" / "circuits"
+INDEX_OUT   = Path(__file__).parent.parent.parent / "web" / "data" / "circuits_index.json"
 
-# ── Fenêtre de simulation ──────────────────────────────────────────────────
-T0_SECONDS      = 7 * 3600          # heure absolue (depuis minuit) du début : 07:00:00
-HORIZON_S       = 3600.0            # durée de la sim : 60 min
-FRAME_INTERVAL  = 2.0               # 0.5 Hz de frames produites
-TRAJ_STEP_S     = 60.0              # résolution interne de la trajectoire prédite
-N_TRAJ_STEPS    = int(HORIZON_S // TRAJ_STEP_S) + 1   # 61 points (t=0 inclus)
+# ── Fenêtre de simulation (affichée par le visualizer) ─────────────────────
+T0_SECONDS     = 7 * 3600     # début de la fenêtre : 07:00:00 (sec depuis minuit)
+HORIZON_S      = 3600.0       # durée affichée : 60 min
+FRAME_INTERVAL = 5.0          # cadence de rafraîchissement du cône (sec de sim)
+TRAJ_STEP_S    = 60.0         # résolution interne du cône
+
+# ── Fenêtre de génération : on garde tous les passages qui chevauchent ─────
+# [T0 - PRE, T0 + HORIZON + POST] pour disposer du passage d'avant et d'après.
+GEN_PRE_S  = 1800.0          # 30 min avant T0
+GEN_POST_S = 1800.0          # 30 min après la fin de l'horizon
+
+# ── Modèle d'incertitude d'adhérence (σ partagé) ───────────────────────────
+# σ(Δt) = SIGMA_COEFF_MIN · (Δt_min)^SIGMA_EXP minutes.
+# Calé sur : σ(1 min)=3 min, σ(10 min)≈6 min, σ(60 min)≈10 min.
+SIGMA_COEFF_MIN = 3.0
+SIGMA_EXP       = 0.301
 
 LAT_M = 111_000.0
 
-
-# ── Modèle d'incertitude d'adhérence ───────────────────────────────────────
-def sigma_time_s(delta_t_s: float) -> float:
-    """σ en secondes pour un horizon Δt en secondes.
-    Calé sur : σ(1 min)=3 min, σ(10 min)=6 min, σ(60 min)≈10 min."""
-    if delta_t_s <= 0:
-        return 0.0
-    return 3.0 * ((delta_t_s / 60.0) ** 0.301) * 60.0
+# Couleurs (référence — le renderer a sa propre table LINE_COLORS).
+LINE_COLORS_HEX = {
+    "51":   "#4488ff", "165":  "#ff8844", "11":   "#44cc44",
+    "129":  "#ffcc00", "155":  "#44ccdd", "66":   "#ff4466", "144":  "#88ff44",
+    "124N": "#ff9900", "124S": "#cc6600", "480N": "#9900cc", "480S": "#6600aa",
+}
 
 
 # ── Lecture CSV ────────────────────────────────────────────────────────────
@@ -53,7 +68,7 @@ def parse_hms(hms: str) -> float:
 
 
 def base_route_name(line_id: str) -> str:
-    """Enlève le suffixe N/S pour les lignes bidirectionnelles (ex: '124N' → '124')."""
+    """Enlève le suffixe N/S pour les lignes bidirectionnelles ('124N' → '124')."""
     if len(line_id) > 1 and line_id[-1] in ("N", "S") and line_id[:-1].isdigit():
         return line_id[:-1]
     return line_id
@@ -65,8 +80,7 @@ def pick_service_per_route(
     trips_rows: list[dict],
     target_route_ids: set[str],
 ) -> dict[str, str]:
-    """Retourne {route_id: meilleur_service_id} pour les routes cibles.
-    Prend le service_id lundi=1 avec le plus de trips par route."""
+    """Retourne {route_id: meilleur_service_id} (lundi=1, le plus de trips)."""
     weekday_services = {r["service_id"] for r in calendar_rows
                         if r.get("monday", "0") == "1"}
     if not weekday_services:
@@ -87,12 +101,8 @@ def pick_service_per_route(
 
 
 # ── Snap d'un arrêt sur la shape de la ligne ──────────────────────────────
-def snap_stop_to_shape(
-    shape_pts: list[dict],
-    stop_lat: float,
-    stop_lon: float,
-) -> float:
-    """Retourne la distance cumulée (m) jusqu'au point de la shape le plus proche du stop."""
+def snap_stop_to_shape(shape_pts: list[dict], stop_lat: float, stop_lon: float) -> float:
+    """Distance cumulée (m) jusqu'au point de la shape le plus proche du stop."""
     if not shape_pts:
         return 0.0
     lonM = LAT_M * math.cos(math.radians(shape_pts[0]["lat"]))
@@ -114,179 +124,42 @@ def snap_stop_to_shape(
     return best_cum
 
 
-# ── Interpolation horaire → progress_m ─────────────────────────────────────
-def build_schedule_progress(
-    trip_stop_visits: list[tuple[float, float, float]],
-    length_m: float,
-) -> callable:
-    """Retourne sched(t) → progress_m (linéaire par morceaux).
-    trip_stop_visits = liste triée de (t_arrivée, t_départ, progress_m)."""
-    if not trip_stop_visits:
-        return lambda t: 0.0
-    pts: list[tuple[float, float]] = []
-    for t_arr, t_dep, prog in trip_stop_visits:
-        if pts and t_arr <= pts[-1][0]:
-            t_arr = pts[-1][0] + 0.001
-        pts.append((t_arr, prog))
-        if t_dep > t_arr:
-            pts.append((t_dep, prog))
-
-    t_first = pts[0][0]
-    t_last  = pts[-1][0]
-    p_last  = pts[-1][1]
-
-    def sched(t: float) -> float:
-        if t <= t_first:
-            return 0.0
-        if t >= t_last:
-            return p_last
-        lo, hi = 0, len(pts) - 1
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            if pts[mid][0] <= t:
-                lo = mid
-            else:
-                hi = mid
-        t1, p1 = pts[lo]
-        t2, p2 = pts[hi]
-        if t2 == t1:
-            return p1
-        return p1 + (p2 - p1) * (t - t1) / (t2 - t1)
-
-    return sched
-
-
-# ── Construction de la trajectoire d'un véhicule ──────────────────────────
-def build_vehicle_trajectory(sched: callable, length_m: float, T_sim_offset: float,
-                             ) -> list[dict]:
-    """Retourne la trajectoire prédite (N_TRAJ_STEPS points) à partir d'une frame."""
-    points: list[dict] = []
-    prev = (-1.0, -1.0, -1.0)
-    for k in range(N_TRAJ_STEPS):
-        delta_t = k * TRAJ_STEP_S
-        t_world = T0_SECONDS + T_sim_offset + delta_t
-        p50 = sched(t_world)
-        if k == 0:
-            p10 = p50
-            p90 = p50
-        else:
-            sigma_s = sigma_time_s(delta_t)
-            p10 = sched(t_world - sigma_s)
-            p90 = sched(t_world + sigma_s)
-
-        p50 = min(max(p50, 0.0), length_m)
-        p10 = min(max(p10, 0.0), p50)
-        p90 = min(max(p90, p50), length_m)
-        if prev[0] >= 0:
-            p10 = max(p10, prev[0])
-            p50 = max(p50, prev[1])
-            p90 = max(p90, prev[2])
-            p50 = max(p50, p10)
-            p90 = max(p90, p50)
-        prev = (p10, p50, p90)
-
-        points.append({
-            "t":   round(T_sim_offset + delta_t, 3),
-            "p10": round(p10, 2),
-            "p50": round(p50, 2),
-            "p90": round(p90, 2),
-        })
-    return points
-
-
-# ── Sélection de 3 trips consécutifs par ligne ─────────────────────────────
-def select_three_trips_for_route(
-    trips_for_route: list[str],
-    stop_times_by_trip: dict[str, list[tuple[float, float, str]]],
-) -> tuple[str | None, str | None, str | None]:
-    """Retourne (trip_précédent, trip_central, trip_suivant).
-    Le trip central est le plus proche de T_mid dans la fenêtre de simulation.
-    Les trips adjacent sont les voisins immédiats dans l'ordre chronologique."""
-    T_mid = T0_SECONDS + HORIZON_S / 2.0
-
-    # Calculer le temps médian de chaque trip valide
-    trip_tmids: list[tuple[float, str]] = []
-    for tid in trips_for_route:
-        visits = stop_times_by_trip.get(tid, [])
-        if len(visits) < 2:
-            continue
-        t_first = visits[0][0]
-        t_last  = visits[-1][0]
-        trip_tmids.append((0.5 * (t_first + t_last), tid))
-
-    if not trip_tmids:
-        return None, None, None
-
-    trip_tmids.sort()
-
-    # Trouver l'index du trip central avec slack progressif
-    center_idx = None
-    for slack in (0, 3600, 7200):
-        best_dist = float("inf")
-        best_idx  = None
-        for i, (tm, tid) in enumerate(trip_tmids):
-            visits  = stop_times_by_trip[tid]
-            t_first = visits[0][0]
-            t_last  = visits[-1][0]
-            if t_last < T0_SECONDS - slack or t_first > T0_SECONDS + HORIZON_S + slack:
-                continue
-            dist = abs(tm - T_mid)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx  = i
-        if best_idx is not None:
-            center_idx = best_idx
-            break
-
-    if center_idx is None:
-        return None, None, None
-
-    prev_trip   = trip_tmids[center_idx - 1][1] if center_idx > 0 else None
-    center_trip = trip_tmids[center_idx][1]
-    next_trip   = trip_tmids[center_idx + 1][1] if center_idx < len(trip_tmids) - 1 else None
-
-    return prev_trip, center_trip, next_trip
-
-
-def _snap_and_orient_trip(
-    chosen: str,
-    stop_times_by_trip: dict[str, list[tuple[float, float, str]]],
+def snap_and_orient_trip(
+    visits: list[tuple[float, float, str]],
     stop_latlon: dict[str, tuple[float, float]],
     route_shape: list[dict],
     length_m: float,
-) -> list[tuple[float, float, float, str]] | None:
-    """Snap les arrêts du trip sur la shape, détecte et corrige la direction inverse.
-    Retourne la liste (t_arr, t_dep, progress_m, stop_id) triée, ou None si <2 arrêts."""
-    visits = stop_times_by_trip[chosen]
-    visits_full: list[tuple[float, float, float, str]] = []
+) -> list[tuple[float, float, float]] | None:
+    """Snap les arrêts du trip sur la shape, corrige la direction inverse.
+    Retourne [(t_arr, t_dep, progress_m)] trié et monotone, ou None si < 2 arrêts."""
+    full: list[tuple[float, float, float]] = []
     for t_arr, t_dep, sid in visits:
         ll = stop_latlon.get(sid)
         if ll is None:
             continue
-        prog = snap_stop_to_shape(route_shape, ll[0], ll[1])
-        visits_full.append((t_arr, t_dep, prog, sid))
+        full.append((t_arr, t_dep, snap_stop_to_shape(route_shape, ll[0], ll[1])))
 
-    if len(visits_full) < 2:
+    if len(full) < 2:
         return None
 
-    # Flip si la progression est majoritairement décroissante
-    n_inc = sum(1 for i in range(1, len(visits_full))
-                if visits_full[i][2] >= visits_full[i - 1][2])
-    if n_inc < len(visits_full) // 2:
-        visits_full = [(ta, td, length_m - p, sid) for ta, td, p, sid in visits_full]
+    # Flip si la progression est majoritairement décroissante (trip dans le sens
+    # opposé à la shape stockée).
+    n_inc = sum(1 for i in range(1, len(full)) if full[i][2] >= full[i - 1][2])
+    if n_inc < len(full) // 2:
+        full = [(ta, td, length_m - p) for ta, td, p in full]
 
-    visits_full.sort(key=lambda v: v[0])
-    for i in range(1, len(visits_full)):
-        if visits_full[i][2] < visits_full[i - 1][2]:
-            visits_full[i] = (visits_full[i][0], visits_full[i][1],
-                              visits_full[i - 1][2], visits_full[i][3])
-    return visits_full
+    full.sort(key=lambda v: v[0])
+    # Forcer la monotonie non-décroissante de la progression
+    for i in range(1, len(full)):
+        if full[i][2] < full[i - 1][2]:
+            full[i] = (full[i][0], full[i][1], full[i - 1][2])
+    return full
 
 
 # ── Algorithme principal ───────────────────────────────────────────────────
-def build_scenario() -> dict:
+def build_circuits() -> tuple[list[dict], dict]:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-    from sim.models import SimulationOutput
+    from sim.models import CircuitData, CircuitIndex
 
     required = ("routes.txt", "trips.txt", "stop_times.txt", "stops.txt", "calendar.txt")
     for name in required:
@@ -299,17 +172,16 @@ def build_scenario() -> dict:
 
     # ── Charger routes_stm.json ────────────────────────────────────────────
     routes_data = json.loads(ROUTES_IN.read_text(encoding="utf-8"))
-    # line_id → (base_short_name, gtfs_direction_id | None)
-    line_info: dict[str, tuple[str, str | None]] = {}
+    line_info: dict[str, tuple[str, str | None]] = {}   # line_id → (base, gtfs_dir)
+    route_of_line: dict[str, dict] = {}
     for r in routes_data:
-        lid  = r["line_id"]
-        gdir = r.get("gtfs_direction_id")
-        line_info[lid] = (base_route_name(lid), gdir)
+        lid = r["line_id"]
+        line_info[lid] = (base_route_name(lid), r.get("gtfs_direction_id"))
+        route_of_line[lid] = r
     print(f"Routes chargées : {sorted(line_info.keys())}")
 
-    shape_of_line:  dict[str, list[dict]] = {r["line_id"]: r["shape"]    for r in routes_data}
-    length_of_line: dict[str, float]      = {r["line_id"]: r["length_m"] for r in routes_data}
-
+    shape_of_line  = {lid: r["shape"]    for lid, r in route_of_line.items()}
+    length_of_line = {lid: r["length_m"] for lid, r in route_of_line.items()}
     base_short_names = {base for base, _ in line_info.values()}
 
     # ── Charger les tables GTFS ────────────────────────────────────────────
@@ -324,23 +196,20 @@ def build_scenario() -> dict:
         for r in stops_rows
     }
 
-    # GTFS route_id → route_short_name pour les routes cibles
     route_id_to_short: dict[str, str] = {}
     for r in routes_rows:
         short = r.get("route_short_name", "").strip()
         if short in base_short_names:
             route_id_to_short[r["route_id"]] = short
-
     target_route_id_set = set(route_id_to_short.keys())
 
-    # ── Choisir le meilleur service weekday par route ──────────────────────
     service_per_route = pick_service_per_route(cal_rows, trips_rows, target_route_id_set)
     print(f"Services weekday utilisés : {sorted(set(service_per_route.values()))}")
 
-    # ── Grouper les trips par line_id (en respectant direction si bidirectionnel) ─
+    # ── Trips par line_id (respecte la direction pour les lignes bidirectionnelles) ─
     trips_by_line: dict[str, list[str]] = defaultdict(list)
     for t in trips_rows:
-        rid  = t.get("route_id", "")
+        rid   = t.get("route_id", "")
         short = route_id_to_short.get(rid)
         if not short:
             continue
@@ -357,11 +226,11 @@ def build_scenario() -> dict:
             trips_by_line[lid].append(tid)
 
     # ── stop_times par trip ────────────────────────────────────────────────
-    all_relevant_trips = {tid for tids in trips_by_line.values() for tid in tids}
+    all_relevant = {tid for tids in trips_by_line.values() for tid in tids}
     raw_st: dict[str, list[tuple[int, float, float, str]]] = defaultdict(list)
     for row in st_rows:
         tid = row["trip_id"]
-        if tid not in all_relevant_trips:
+        if tid not in all_relevant:
             continue
         try:
             seq   = int(row["stop_sequence"])
@@ -374,139 +243,104 @@ def build_scenario() -> dict:
     stop_times_by_trip: dict[str, list[tuple[float, float, str]]] = {}
     for tid, visits in raw_st.items():
         visits.sort(key=lambda x: x[0])
-        stop_times_by_trip[tid] = [(t_arr, t_dep, sid) for _, t_arr, t_dep, sid in visits]
+        stop_times_by_trip[tid] = [(ta, td, sid) for _, ta, td, sid in visits]
 
-    # ── Sélectionner 3 trips (prev, curr, next) par ligne ─────────────────
-    selected: list[dict] = []
+    # ── Construire un fichier par circuit ──────────────────────────────────
+    gen_lo = T0_SECONDS - GEN_PRE_S
+    gen_hi = T0_SECONDS + HORIZON_S + GEN_POST_S
+
+    circuit_files: list[dict] = []   # objets CircuitData (dict)
+    index_entries: list[dict] = []
 
     for line_id in sorted(line_info.keys()):
-        tids = trips_by_line.get(line_id, [])
-        prev_tid, curr_tid, next_tid = select_three_trips_for_route(tids, stop_times_by_trip)
+        _, gdir = line_info[line_id]
+        route_shape = shape_of_line[line_id]
+        length_m    = length_of_line[line_id]
 
-        if curr_tid is None:
-            print(f"  AVERTISSEMENT : aucun trip central pour la ligne {line_id}")
+        trips_out: list[dict] = []
+        for tid in trips_by_line.get(line_id, []):
+            visits = stop_times_by_trip.get(tid, [])
+            if len(visits) < 2:
+                continue
+            # Fenêtre de génération : garder les passages qui chevauchent
+            if visits[-1][0] < gen_lo or visits[0][0] > gen_hi:
+                continue
+            full = snap_and_orient_trip(visits, stop_latlon, route_shape, length_m)
+            if full is None:
+                continue
+            trips_out.append({
+                "trip_id": tid,
+                "schedule": [
+                    {"t_arr": round(ta, 1), "t_dep": round(td, 1), "progress_m": round(p, 2)}
+                    for ta, td, p in full
+                ],
+            })
+
+        if not trips_out:
+            print(f"  AVERTISSEMENT : aucun passage pour {line_id}")
             continue
 
-        for role, chosen in [("prev", prev_tid), ("curr", curr_tid), ("next", next_tid)]:
-            if chosen is None:
-                continue
-            route_shape = shape_of_line[line_id]
-            visits_full = _snap_and_orient_trip(
-                chosen, stop_times_by_trip, stop_latlon,
-                route_shape, length_of_line[line_id],
-            )
-            if visits_full is None:
-                print(f"  AVERTISSEMENT : trip {chosen} ({line_id}/{role}) — <2 arrêts avec position.")
-                continue
+        trips_out.sort(key=lambda tr: tr["schedule"][0]["t_arr"])
 
-            visits_prog = [(t_arr, t_dep, prog) for t_arr, t_dep, prog, _ in visits_full]
-            sched = build_schedule_progress(visits_prog, length_of_line[line_id])
-            vehicle_id = f"{line_id}-{role}"
-            selected.append({
-                "vehicle_id": vehicle_id,
-                "line_id":    line_id,
-                "length_m":   length_of_line[line_id],
-                "sched":      sched,
-                "visits":     visits_full,
-                "trip_id":    chosen,
-            })
-            print(f"  Ligne {line_id:>5}/{role} : trip {chosen}, {len(visits_full)} arrêts, "
-                  f"{visits_full[0][0]/3600:.2f}h → {visits_full[-1][0]/3600:.2f}h")
-
-    if not selected:
-        raise RuntimeError("Aucun trip sélectionné.")
-
-    # ── Produire les frames ────────────────────────────────────────────────
-    frames: list[dict] = []
-    T_sim = 0.0
-    while T_sim <= HORIZON_S + 1e-6:
-        vehicles_state = []
-        for v in selected:
-            traj = build_vehicle_trajectory(v["sched"], v["length_m"], T_sim)
-            vehicles_state.append({
-                "vehicle_id": v["vehicle_id"],
-                "line_id":    v["line_id"],
-                "trajectory": traj,
-            })
-        frames.append({
-            "sim_time": round(T_sim, 3),
-            "vehicles": vehicles_state,
-            "transfers": [],
-            "passenger": None,
+        circuit = {
+            "line_id": line_id,
+            "gtfs_direction_id": gdir,
+            "route": route_of_line[line_id],
+            "trips": trips_out,
+        }
+        circuit_files.append(circuit)
+        index_entries.append({
+            "line_id": line_id,
+            "gtfs_direction_id": gdir,
+            "color": LINE_COLORS_HEX.get(line_id),
+            "file": f"circuits/{line_id}.json",
+            "n_trips": len(trips_out),
         })
-        T_sim = round(T_sim + FRAME_INTERVAL, 6)
-    print(f"Frames générées : {len(frames)} (résolution {FRAME_INTERVAL}s)")
+        print(f"  {line_id:>5} : {len(trips_out)} passages "
+              f"({trips_out[0]['schedule'][0]['t_arr']/3600:.2f}h → "
+              f"{trips_out[-1]['schedule'][-1]['t_arr']/3600:.2f}h)")
 
-    # ── Fenêtres de correspondance ─────────────────────────────────────────
-    stop_to_lines: dict[str, set[str]] = defaultdict(set)
-    for r in routes_data:
-        for s in r["stops"]:
-            stop_to_lines[s["stop_id"]].add(r["line_id"])
+    if not circuit_files:
+        raise RuntimeError("Aucun circuit construit.")
 
-    windows: list[dict] = []
-    for v in selected:
-        for t_arr, t_dep, _prog, sid in v["visits"]:
-            if len(stop_to_lines[sid]) < 2:
-                continue
-            t_open  = t_arr - T0_SECONDS
-            t_close = max(t_dep - T0_SECONDS, t_open + 1.0)
-            if t_close < 0 or t_open > HORIZON_S:
-                continue
-            t_open  = max(0.0, t_open)
-            t_close = min(HORIZON_S, t_close)
-            if t_close <= t_open:
-                continue
-            windows.append({
-                "stop_id": sid,
-                "connector_vehicle_id": v["vehicle_id"],
-                "t_open":  round(t_open, 3),
-                "t_close": round(t_close, 3),
-            })
-    print(f"Fenêtres de correspondance émises : {len(windows)}")
-
-    # ── Événements d'arrêt ────────────────────────────────────────────────
-    stop_events: list[dict] = []
-    for v in selected:
-        for t_arr, t_dep, prog, sid in v["visits"]:
-            t_arr_rel = t_arr - T0_SECONDS
-            t_dep_rel = t_dep - T0_SECONDS
-            if t_dep_rel < 0 or t_arr_rel > HORIZON_S:
-                continue
-            stop_events.append({
-                "vehicle_id":  v["vehicle_id"],
-                "line_id":     v["line_id"],
-                "stop_id":     sid,
-                "progress_m":  round(prog, 2),
-                "t_arr":       round(t_arr_rel, 3),
-                "t_dep":       round(t_dep_rel, 3),
-            })
-    print(f"Événements d'arrêt émis : {len(stop_events)}")
-
-    # ── Assembler et valider ───────────────────────────────────────────────
-    output = {
-        "routes": routes_data,
-        "frames": frames,
-        "passenger_trajectory": [],
-        "transfer_windows": windows,
-        "stop_events": stop_events,
+    index = {
+        "t0_seconds": float(T0_SECONDS),
+        "horizon_s": HORIZON_S,
+        "frame_interval": FRAME_INTERVAL,
+        "traj_step": TRAJ_STEP_S,
+        "sigma": {"kind": "power", "coeff_min": SIGMA_COEFF_MIN, "exp": SIGMA_EXP},
+        "circuits": index_entries,
     }
+
+    # ── Validation Pydantic ────────────────────────────────────────────────
     print("Validation Pydantic …")
-    SimulationOutput.model_validate(output)
-    return output
+    for c in circuit_files:
+        CircuitData.model_validate(c)
+    CircuitIndex.model_validate(index)
+
+    return circuit_files, index
 
 
 def main() -> None:
-    print(f"Construction de {OUTPUT.name} …")
-    print(f"  Fenêtre : {T0_SECONDS/3600:.1f}h → {(T0_SECONDS+HORIZON_S)/3600:.1f}h "
-          f"({HORIZON_S/60:.0f} min), {N_TRAJ_STEPS} pts de trajectoire")
-    output = build_scenario()
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(
-        json.dumps(output, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
-    size_mb = OUTPUT.stat().st_size / (1024 * 1024)
-    print(f"Écrit : {OUTPUT}  ({size_mb:.1f} MB)")
+    print(f"Construction des circuits (fenêtre {T0_SECONDS/3600:.1f}h → "
+          f"{(T0_SECONDS+HORIZON_S)/3600:.1f}h, génération ±30 min) …")
+    circuit_files, index = build_circuits()
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Nettoyer les anciens fichiers circuit (lignes supprimées comme la 711)
+    for old in OUTPUT_DIR.glob("*.json"):
+        old.unlink()
+
+    total = 0
+    for c in circuit_files:
+        path = OUTPUT_DIR / f"{c['line_id']}.json"
+        path.write_text(json.dumps(c, ensure_ascii=False, separators=(",", ":")),
+                        encoding="utf-8")
+        total += path.stat().st_size
+
+    INDEX_OUT.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Écrit : {len(circuit_files)} fichiers circuit "
+          f"({total/1024:.0f} KB au total) + {INDEX_OUT.name}")
 
 
 if __name__ == "__main__":

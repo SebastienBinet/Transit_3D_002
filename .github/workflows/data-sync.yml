@@ -7,10 +7,21 @@ on:
 
 permissions:
   contents: write           # Pour pousser les fichiers mis à jour
+  pages: write              # Pour déployer le site (les pushes du bot ne déclenchent pas ci.yml)
+  id-token: write           # Requis par actions/deploy-pages
+
+# Un commit poussé par le GITHUB_TOKEN ne redéclenche aucun workflow (anti-boucle),
+# donc ci.yml/deploy ne tourne pas après ce sync : on déploie Pages ici directement.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +73,19 @@ jobs:
                   web/data/build_info.json 2>/dev/null || true
           # Retirer du suivi l'ancien monolithe s'il traîne encore (remplacé par circuits/)
           git rm --quiet --ignore-unmatch web/data/scenario_stm_1.json 2>/dev/null || true
-          git diff --staged --quiet && echo "Aucune modification." && exit 0
-          git commit -m "sync: données STM+OSM $(date -u +%Y-%m-%d)"
-          git push
+          if git diff --staged --quiet; then
+            echo "Aucune modification à committer."
+          else
+            git commit -m "sync: données STM+OSM $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      # Déployer GitHub Pages avec les données fraîchement mises à jour.
+      # Indispensable : le push ci-dessus (via GITHUB_TOKEN) ne déclenche pas ci.yml,
+      # donc sans ceci le site live ne verrait jamais les nouveaux fichiers circuit.
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/
+      - uses: actions/deploy-pages@v4
+        id: deploy

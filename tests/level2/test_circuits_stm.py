@@ -46,6 +46,15 @@ def test_circuit_schema_valid() -> None:
     CircuitData.model_validate(_synthetic_circuit())
 
 
+def test_circuit_accepts_empty_trips() -> None:
+    """Un circuit sans passage dans la fenêtre (ex. 480N le matin) reste valide :
+    géométrie présente, trips vide. Emplacement prêt pour les données d'après-midi."""
+    c = _synthetic_circuit()
+    c["trips"] = []
+    validated = CircuitData.model_validate(c)
+    assert validated.trips == []
+
+
 def test_circuit_index_schema_valid() -> None:
     CircuitIndex.model_validate({
         "t0_seconds": 25200,

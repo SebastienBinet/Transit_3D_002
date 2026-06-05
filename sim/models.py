@@ -89,7 +89,8 @@ class RouteGeometry(BaseModel):
     line_id: str
     stops: list[Stop]
     shape: list[LatLon]
-    length_m: float = 0.0  # longueur totale du tracé
+    length_m: float = 0.0
+    gtfs_direction_id: str | None = None  # "0" ou "1" pour les lignes bidirectionnelles
 
 
 class TransferWindow(BaseModel):

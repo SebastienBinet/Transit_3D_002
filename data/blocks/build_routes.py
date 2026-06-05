@@ -18,18 +18,24 @@ CACHE_DIR  = Path(__file__).parent.parent / "cache" / "gtfs"
 OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
 
 # ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
-TARGET_ROUTES = {"51", "11", "165", "711", "129", "155", "66", "144"}
+TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480"}
+
+# Lignes pour lesquelles on exporte les deux directions (N et S)
+BIDIRECTIONAL = {"124", "480"}
 
 # Couleur hex par ligne (pour l'IHM — non stockée dans le JSON, référence pour renderer.js)
 LINE_COLORS_HEX = {
-    "51":  "#4488ff",   # bleu
-    "165": "#ff8844",   # orange
-    "11":  "#44cc44",   # vert
-    "711": "#dd44dd",   # violet
-    "129": "#ffcc00",   # jaune
-    "155": "#44ccdd",   # cyan
-    "66":  "#ff4466",   # rose
-    "144": "#88ff44",   # vert lime
+    "51":   "#4488ff",   # bleu
+    "165":  "#ff8844",   # orange
+    "11":   "#44cc44",   # vert
+    "129":  "#ffcc00",   # jaune
+    "155":  "#44ccdd",   # cyan
+    "66":   "#ff4466",   # rose
+    "144":  "#88ff44",   # vert lime
+    "124N": "#ff9900",   # orange foncé
+    "124S": "#cc6600",   # brun-orange
+    "480N": "#9900cc",   # violet
+    "480S": "#6600aa",   # mauve foncé
 }
 
 LAT_M = 111_000.0
@@ -145,57 +151,44 @@ def build_routes() -> list[dict]:
     # (entrée vers le centre-ville, pointe du matin). Tiebreak : plus grand nombre d'arrêts.
     result_routes: list[dict] = []
 
-    for route_id, short_name in target_route_ids.items():
-        candidates = [
-            tid for tid in trips_by_route[route_id]
-            if len(stop_seq_by_trip.get(tid, [])) > 1
-        ]
-        if not candidates:
-            print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short_name}")
-            continue
+    def southbound_score(tid: str) -> float:
+        """Positif si le dernier arrêt est plus au sud que le premier."""
+        stops = stop_seq_by_trip.get(tid, [])
+        if len(stops) < 2:
+            return 0.0
+        first = stop_info.get(stops[0])
+        last  = stop_info.get(stops[-1])
+        if not first or not last:
+            return 0.0
+        return first["lat"] - last["lat"]
 
-        # Meilleur trip par direction (celui avec le plus d'arrêts dans chaque direction)
-        by_dir: dict[str, str] = {}
-        for tid in candidates:
-            d = direction_of_trip.get(tid, "0")
-            if d not in by_dir or len(stop_seq_by_trip[tid]) > len(stop_seq_by_trip[by_dir[d]]):
-                by_dir[d] = tid
+    def direction_suffix(tid: str) -> str:
+        """'N' si le dernier arrêt est plus au nord, 'S' sinon."""
+        return "S" if southbound_score(tid) > 0 else "N"
 
-        def southbound_score(tid: str) -> float:
-            """Positif si le dernier arrêt est plus au sud (lat inférieure) que le premier."""
-            stops = stop_seq_by_trip.get(tid, [])
-            if len(stops) < 2:
-                return 0.0
-            first = stop_info.get(stops[0])
-            last  = stop_info.get(stops[-1])
-            if not first or not last:
-                return 0.0
-            return first["lat"] - last["lat"]
+    def build_one_direction(
+        short_name: str,
+        best_trip: str,
+        line_id: str,
+        gtfs_dir_id: str | None,
+    ) -> dict | None:
+        shape_id = shape_of_trip[best_trip]
+        stop_ids = stop_seq_by_trip[best_trip]
+        print(f"  Ligne {line_id} (dir {gtfs_dir_id}) : trip {best_trip}, "
+              f"{len(stop_ids)} arrêts, shape {shape_id}")
 
-        best_trip = max(
-            by_dir.values(),
-            key=lambda t: (southbound_score(t), len(stop_seq_by_trip.get(t, []))),
-        )
-        shape_id  = shape_of_trip[best_trip]
-        stop_ids  = stop_seq_by_trip[best_trip]
-
-        print(f"  Ligne {short_name} : trip {best_trip}, {len(stop_ids)} arrêts, shape {shape_id}")
-
-        # Shape → liste (lat, lon)
         raw_pts = shape_pts_by_id.get(shape_id, [])
         if not raw_pts:
-            print(f"  AVERTISSEMENT : shape {shape_id} vide, ligne {short_name} ignorée")
-            continue
+            print(f"  AVERTISSEMENT : shape {shape_id} vide, ligne {line_id} ignorée")
+            return None
         shape_latlon = [(pt[0], pt[1]) for pt in raw_pts]
 
-        # Longueur totale de la shape
         shape_length_m = sum(
             haversine_m(shape_latlon[i][0], shape_latlon[i][1],
                         shape_latlon[i+1][0], shape_latlon[i+1][1])
             for i in range(len(shape_latlon) - 1)
         )
 
-        # Arrêts avec progress_m le long de la shape
         stops_out = []
         seen_stops: set[str] = set()
         for sid in stop_ids:
@@ -213,16 +206,51 @@ def build_routes() -> list[dict]:
                 "progress_m": round(prog, 1),
             })
 
-        # Trier les arrêts par progress_m croissant
         stops_out.sort(key=lambda s: s["progress_m"])
 
-        route_dict = {
-            "line_id":  short_name,
+        route_dict: dict = {
+            "line_id":  line_id,
             "stops":    stops_out,
             "shape":    [{"lat": pt[0], "lon": pt[1]} for pt in shape_latlon],
             "length_m": round(shape_length_m, 1),
         }
-        result_routes.append(route_dict)
+        if gtfs_dir_id is not None:
+            route_dict["gtfs_direction_id"] = gtfs_dir_id
+        return route_dict
+
+    for route_id, short_name in target_route_ids.items():
+        candidates = [
+            tid for tid in trips_by_route[route_id]
+            if len(stop_seq_by_trip.get(tid, [])) > 1
+        ]
+        if not candidates:
+            print(f"  AVERTISSEMENT : aucun trip valide pour la ligne {short_name}")
+            continue
+
+        # Meilleur trip par direction (celui avec le plus d'arrêts dans chaque direction)
+        by_dir: dict[str, str] = {}
+        for tid in candidates:
+            d = direction_of_trip.get(tid, "0")
+            if d not in by_dir or len(stop_seq_by_trip[tid]) > len(stop_seq_by_trip[by_dir[d]]):
+                by_dir[d] = tid
+
+        if short_name in BIDIRECTIONAL:
+            # Émettre une entrée par direction avec suffixe N/S
+            for dir_id, best_trip in sorted(by_dir.items()):
+                suf    = direction_suffix(best_trip)
+                lid    = f"{short_name}{suf}"
+                result = build_one_direction(short_name, best_trip, lid, dir_id)
+                if result:
+                    result_routes.append(result)
+        else:
+            # Direction unique : préférer celle dont le dernier arrêt est plus au sud
+            best_trip = max(
+                by_dir.values(),
+                key=lambda t: (southbound_score(t), len(stop_seq_by_trip.get(t, []))),
+            )
+            result = build_one_direction(short_name, best_trip, short_name, None)
+            if result:
+                result_routes.append(result)
 
     return result_routes
 

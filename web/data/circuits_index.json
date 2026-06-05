@@ -59,6 +59,13 @@
       "n_trips": 37
     },
     {
+      "line_id": "480N",
+      "gtfs_direction_id": "1",
+      "color": "#9900cc",
+      "file": "circuits/480N.json",
+      "n_trips": 0
+    },
+    {
       "line_id": "480S",
       "gtfs_direction_id": "0",
       "color": "#6600aa",

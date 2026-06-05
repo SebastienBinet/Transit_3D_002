@@ -122,6 +122,7 @@
   <script type="module">
     import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
+    import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
 
     const canvas = document.getElementById('canvas');
@@ -158,33 +159,33 @@
     }
 
     async function loadStmSimulationCase() {
-      // Cas 5 : géométrie STM réelle + carte OSM + trajectoires depuis les
-      // horaires planifiés du GTFS (généré par build_scenario_stm.py).
-      let data, bounds;
+      // Cas 5 : géométrie STM réelle + carte OSM + cônes d'incertitude
+      // reconstruits à la volée depuis les horaires compacts par circuit
+      // (fichiers circuits/*.json + circuits_index.json, schéma scalable).
+      let model, bounds;
       try {
-        [data, bounds] = await Promise.all([
-          fetch('./data/scenario_stm_1.json').then(r => {
-            if (!r.ok) throw new Error(`scenario_stm_1.json indisponible (HTTP ${r.status})`);
-            return r.json();
-          }),
+        const [data, b] = await Promise.all([
+          loadCircuits('./data'),
           fetch('./data/map_bounds.json').then(r => r.json()),
         ]);
+        bounds = b;
+        model = createScheduleModel(data);
       } catch (err) {
         alert(
-          `Le scénario STM n'a pas encore été généré.\n\n${err.message}\n\n` +
+          `Les circuits STM n'ont pas encore été générés.\n\n${err.message}\n\n` +
           `Lancer le workflow data-sync.yml (onglet Actions) ou exécuter ` +
           `localement : uv run python data/blocks/build_scenario_stm.py`
         );
         return;
       }
-      routes = data.routes;
+      routes = model.routes;
       init(canvas, {
         routes,
-        transferWindows: data.transfer_windows ?? [],
-        stopEvents: data.stop_events ?? [],
+        transferWindows: [],
+        stopEvents: [],
         mapBackground: { url: './data/map_montreal.png', bounds },
       });
-      player = createPlayer(data.frames);
+      player = model;
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
     }

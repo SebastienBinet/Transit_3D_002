@@ -17,6 +17,8 @@ Langue de travail: français.
 - **Contrat de données** simulateur→visualizer: frames = état complet auto-suffisant + timestamp.
   Le simulateur calcule les trajectoires; le simulateur est l'autorité du temps; le visualizer
   ne fait que dessiner et n'extrapole jamais au-delà des frames reçues.
+  (Données réelles STM: schéma horaire compact par circuit + rejeu déterministe du cône dans la
+  couche données Three.js-free — voir DECISIONS.md §5bis. Reste dans l'esprit de l'invariant.)
 - **Incertitude**: percentiles `p10/p50/p90` tranchés par temps (alignés par échantillon).
   Position en `progress_m` le long du tracé. Pas de Monte Carlo / densité volumétrique.
 - **Invariants de trajectoire**: temps strictement croissant; progress monotone non-décroissant;

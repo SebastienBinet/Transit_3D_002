@@ -1,47 +1,26 @@
 """
 Tests unitaires de data/blocks/build_scenario_stm.py.
-Vérifie le modèle σ, l'interpolation horaire→progress, et les invariants de trajectoire.
+
+La construction du cône d'incertitude p10/p50/p90 vit désormais côté visualizer
+(web/js/scenario-model.js, couverte par tests/level3/test_scenario_model.mjs).
+Ici on couvre la logique Python restante : parsing horaire, nommage de direction,
+snap des arrêts sur la shape et détection/correction de la direction inverse.
 """
 from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from data.blocks.build_scenario_stm import (
-    sigma_time_s,
-    build_schedule_progress,
-    build_vehicle_trajectory,
     parse_hms,
-    HORIZON_S,
-    TRAJ_STEP_S,
-    T0_SECONDS,
-    N_TRAJ_STEPS,
+    base_route_name,
+    snap_stop_to_shape,
+    snap_and_orient_trip,
 )
 
 
-# ── σ(Δt) ──────────────────────────────────────────────────────────────────
-
-def test_sigma_zero_at_t0():
-    assert sigma_time_s(0) == 0.0
-
-
-def test_sigma_negative_is_zero():
-    assert sigma_time_s(-10) == 0.0
-
-
-def test_sigma_at_1_min_is_3_min():
-    assert abs(sigma_time_s(60) - 180) < 15
-
-
-def test_sigma_at_60_min_is_10_min():
-    assert abs(sigma_time_s(3600) - 600) < 60
-
-
 # ── parse_hms ──────────────────────────────────────────────────────────────
-
 def test_parse_hms_basic():
     assert parse_hms("07:00:00") == 25200
     assert parse_hms("07:30:00") == 27000
@@ -49,104 +28,66 @@ def test_parse_hms_basic():
     assert parse_hms("25:15:00") == 25 * 3600 + 15 * 60
 
 
-# ── build_schedule_progress ────────────────────────────────────────────────
-
-def test_sched_before_first_returns_zero():
-    visits = [(1000.0, 1030.0, 0.0), (1300.0, 1330.0, 500.0)]
-    sched = build_schedule_progress(visits, length_m=1000.0)
-    assert sched(500.0) == 0.0
-    assert sched(1000.0) == 0.0
+# ── base_route_name ────────────────────────────────────────────────────────
+def test_base_route_name_strips_direction_suffix():
+    assert base_route_name("124N") == "124"
+    assert base_route_name("480S") == "480"
 
 
-def test_sched_after_last_returns_last_progress():
-    # Après le dernier arrêt connu, on retourne son progress (pas length_m).
-    # Cela évite un saut instantané vers le terminus quand le dernier arrêt
-    # n'est pas le terminus géographique du tracé.
-    visits = [(1000.0, 1030.0, 0.0), (1300.0, 1330.0, 500.0)]
-    sched = build_schedule_progress(visits, length_m=1000.0)
-    assert sched(2000.0) == 500.0
+def test_base_route_name_keeps_plain_lines():
+    assert base_route_name("51") == "51"
+    assert base_route_name("165") == "165"
+    # pas de faux positif sur une lettre non N/S
+    assert base_route_name("11A") == "11A"
 
 
-def test_sched_linear_between_stops():
-    visits = [(0.0, 0.0, 0.0), (100.0, 100.0, 1000.0)]
-    sched = build_schedule_progress(visits, length_m=1000.0)
-    assert abs(sched(50.0) - 500.0) < 1.0
+# ── snap_stop_to_shape ─────────────────────────────────────────────────────
+# Shape est-ouest le long de lat=45.50, de lon -73.65 à -73.55
+SHAPE = [
+    {"lat": 45.50, "lon": -73.65},
+    {"lat": 45.50, "lon": -73.60},
+    {"lat": 45.50, "lon": -73.55},
+]
 
 
-def test_sched_constant_during_dwell():
-    """Pendant l'arrêt (dwell), progress reste constant."""
-    visits = [(0.0, 0.0, 0.0), (100.0, 130.0, 500.0), (200.0, 200.0, 1000.0)]
-    sched = build_schedule_progress(visits, length_m=1000.0)
-    assert abs(sched(100.0) - 500.0) < 1.0
-    assert abs(sched(115.0) - 500.0) < 1.0
-    assert abs(sched(130.0) - 500.0) < 1.0
+def test_snap_first_vertex_is_zero():
+    assert snap_stop_to_shape(SHAPE, 45.50, -73.65) == 0.0
 
 
-# ── build_vehicle_trajectory ───────────────────────────────────────────────
-
-def _simple_sched():
-    """Trip linéaire : démarre à T0, finit à T0 + 1800, longueur 9000 m."""
-    visits = [
-        (T0_SECONDS, T0_SECONDS, 0.0),
-        (T0_SECONDS + 1800.0, T0_SECONDS + 1800.0, 9000.0),
-    ]
-    return build_schedule_progress(visits, length_m=9000.0), 9000.0
+def test_snap_increases_along_shape():
+    d_mid = snap_stop_to_shape(SHAPE, 45.50, -73.60)
+    d_end = snap_stop_to_shape(SHAPE, 45.50, -73.55)
+    assert 0.0 < d_mid < d_end
 
 
-def test_trajectory_length_is_31_points():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=0.0)
-    assert len(traj) == N_TRAJ_STEPS
+# ── snap_and_orient_trip ───────────────────────────────────────────────────
+STOPS = {
+    "A": (45.50, -73.65),   # début de la shape
+    "B": (45.50, -73.60),   # milieu
+    "C": (45.50, -73.55),   # fin
+}
+LENGTH = snap_stop_to_shape(SHAPE, 45.50, -73.55)  # longueur ≈ shape complète
 
 
-def test_trajectory_t_strictly_increasing():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=300.0)
-    for i in range(1, len(traj)):
-        assert traj[i]["t"] > traj[i-1]["t"]
+def test_orient_forward_trip_is_increasing():
+    visits = [(100.0, 110.0, "A"), (200.0, 210.0, "B"), (300.0, 300.0, "C")]
+    full = snap_and_orient_trip(visits, STOPS, SHAPE, LENGTH)
+    assert full is not None
+    progs = [p for _, _, p in full]
+    assert progs == sorted(progs)
+    assert progs[0] < progs[-1]
 
 
-def test_trajectory_p10_p50_p90_ordered():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=300.0)
-    for pt in traj:
-        assert pt["p10"] <= pt["p50"] <= pt["p90"]
+def test_orient_reverse_trip_is_flipped_to_increasing():
+    # Trip dans le sens C→B→A : la progression brute décroît → flip attendu.
+    visits = [(100.0, 110.0, "C"), (200.0, 210.0, "B"), (300.0, 300.0, "A")]
+    full = snap_and_orient_trip(visits, STOPS, SHAPE, LENGTH)
+    assert full is not None
+    progs = [p for _, _, p in full]
+    assert progs == sorted(progs), f"progression non monotone après flip : {progs}"
+    assert progs[0] < progs[-1]
 
 
-def test_trajectory_progress_non_decreasing():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=300.0)
-    for i in range(1, len(traj)):
-        assert traj[i]["p10"] >= traj[i-1]["p10"]
-        assert traj[i]["p50"] >= traj[i-1]["p50"]
-        assert traj[i]["p90"] >= traj[i-1]["p90"]
-
-
-def test_trajectory_percentiles_equal_at_t0():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=600.0)
-    p = traj[0]
-    assert p["p10"] == p["p50"] == p["p90"]
-
-
-def test_trajectory_progress_within_route_length():
-    sched, L = _simple_sched()
-    traj = build_vehicle_trajectory(sched, L, T_sim_offset=0.0)
-    for pt in traj:
-        assert 0.0 <= pt["p10"] <= L
-        assert 0.0 <= pt["p50"] <= L
-        assert 0.0 <= pt["p90"] <= L
-
-
-def test_trajectory_uncertainty_widens_with_horizon():
-    """L'écart p90 − p10 doit croître avec l'horizon (en l'absence de plafonnement)."""
-    # Trip lent : 60 m/s = 60 m par σ minute, on reste loin de la fin → pas de plafonnement
-    visits = [(T0_SECONDS - 1000, T0_SECONDS - 1000, 0.0),
-              (T0_SECONDS + 5000, T0_SECONDS + 5000, 360_000.0)]  # 60 m/s
-    sched = build_schedule_progress(visits, length_m=360_000.0)
-    traj = build_vehicle_trajectory(sched, 360_000.0, T_sim_offset=200.0)
-    widths = [pt["p90"] - pt["p10"] for pt in traj]
-    assert widths[0] == 0.0
-    # La largeur doit globalement croître (pas strictement à chaque pas, mais sur l'horizon)
-    assert widths[-1] > widths[1]
-    assert widths[5] >= widths[1]
+def test_orient_rejects_single_stop():
+    visits = [(100.0, 110.0, "A")]
+    assert snap_and_orient_trip(visits, STOPS, SHAPE, LENGTH) is None

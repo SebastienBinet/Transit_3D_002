@@ -72,6 +72,34 @@ Staleness (plus de frames reçues): le visualizer fige sur le sim_time de la der
 l'affiche honnêtement; indicateur "âge des données" séparé optionnel. (Pertinent au système live,
 pas au prototype.)
 
+### 5bis. Schéma horaire compact pour les données réelles STM (révision, 2026-06)
+
+Problème: pré-calculer toutes les frames (chaque frame ré-émet la trajectoire prédite complète
+de chaque véhicule) est en O(frames × véhicules × points). Pour les vraies données STM
+(11 lignes, 3 passages, fenêtre 1 h, frame/2 s) le fichier monolithique atteignait **166 MB**
+(> limite GitHub 100 MB), et ne tient PAS à l'échelle visée (tous les circuits, toutes les
+directions, toute la semaine).
+
+Décision: pour les scénarios issus de données réelles, stocker chaque passage (trip) **une seule
+fois** sous forme d'horaire planifié `[(t_arr, t_dep, progress_m)]` (sec depuis minuit), plus un
+**modèle σ global** `σ(Δt)=coeff·Δt_min^exp`. Un fichier par circuit-direction
+(`web/data/circuits/{line_id}.json`) + un index (`circuits_index.json`). Chargement paresseux.
+Taille: tous les circuits × directions × semaine ≈ dizaines de MB au total, KB par vue.
+
+Réconciliation avec l'invariant "le visualizer n'extrapole jamais au-delà des frames reçues"
+(§5): l'intention de l'invariant vise le cas **live** (ne pas fabriquer de prédictions que le
+simulateur autoritaire n'a pas envoyées; gestion du staleness). Pour le prototype pré-calculé,
+le simulateur reste l'autorité: il définit l'horaire ET le modèle σ. La couche données
+Three.js-free (`web/js/scenario-model.js`) ne fait que **rejouer déterministe­ment** ces deux
+sorties pour reconstruire le cône p10/p50/p90 du « maintenant » courant — elle n'invente aucune
+nouvelle prédiction. Le `frame` synthétisé reste de forme identique (`vehicles[].trajectory` de
+PercentilePoint), donc `renderer.js` est inchangé. Modèles Pydantic source de vérité:
+`StopVisit / TripSchedule / SigmaModel / CircuitData / CircuitIndex`. Couverture: L2
+(`test_circuits_stm.py`) pour le schéma, L3 (`test_scenario_model.mjs`) pour la reconstruction
+du cône (mêmes invariants: temps croissant, progress non-décroissant, p10≤p50≤p90, égaux à t=0).
+
+Les scénarios jouet (`scenario1/2.json`) conservent le format frame d'origine (mode récit).
+
 ---
 
 ## 6. Système de coordonnées

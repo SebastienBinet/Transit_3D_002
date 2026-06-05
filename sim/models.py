@@ -115,3 +115,79 @@ class SimulationOutput(BaseModel):
     passenger_trajectory: list[PassengerCheckpoint] = []
     transfer_windows: list[TransferWindow] = []
     stop_events: list[StopEvent] = []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Schéma horaire compact (scalable) — un fichier par circuit-direction.
+#
+# Au lieu de pré-calculer des frames redondantes (chaque frame ré-émet la
+# trajectoire prédite complète de chaque véhicule → O(frames)), on stocke chaque
+# passage UNE fois sous forme d'horaire (t, progress_m) + un modèle d'incertitude
+# global. Le visualizer reconstruit le cône p10/p50/p90 pour le « maintenant »
+# courant par rejeu déterministe de l'horaire et du modèle σ (pas de nouvelle
+# prédiction). Voir DECISIONS.md §5 pour la réconciliation avec l'invariant.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StopVisit(BaseModel):
+    """Passage planifié à un arrêt, en secondes depuis minuit (référence de service)."""
+    t_arr: float
+    t_dep: float
+    progress_m: float
+
+    @model_validator(mode='after')
+    def check_order(self) -> StopVisit:
+        if self.t_dep < self.t_arr:
+            raise ValueError(f"t_dep ({self.t_dep}) < t_arr ({self.t_arr})")
+        return self
+
+
+class TripSchedule(BaseModel):
+    """Un passage (un trip GTFS) : la suite de ses arrêts planifiés."""
+    trip_id: str
+    schedule: list[StopVisit]
+
+    @model_validator(mode='after')
+    def check_schedule(self) -> TripSchedule:
+        s = self.schedule
+        if len(s) < 2:
+            raise ValueError("schedule doit avoir ≥ 2 arrêts")
+        for i in range(1, len(s)):
+            if s[i].t_arr < s[i - 1].t_arr:
+                raise ValueError("t_arr doit être non-décroissant le long du trip")
+            if s[i].progress_m < s[i - 1].progress_m:
+                raise ValueError("progress_m doit être non-décroissant le long du trip")
+        return self
+
+
+class SigmaModel(BaseModel):
+    """Modèle d'incertitude d'adhérence : σ(Δt) en secondes.
+    'power' : σ(Δt) = coeff_min · (Δt_min)^exp minutes."""
+    kind: Literal["power"] = "power"
+    coeff_min: float  # σ(1 min) en minutes
+    exp: float
+
+
+class CircuitData(BaseModel):
+    """Contenu d'un fichier circuit : géométrie + tous les passages de la fenêtre."""
+    line_id: str
+    gtfs_direction_id: str | None = None
+    route: RouteGeometry
+    trips: list[TripSchedule]
+
+
+class CircuitIndexEntry(BaseModel):
+    line_id: str
+    gtfs_direction_id: str | None = None
+    color: str | None = None
+    file: str        # chemin relatif à web/data/ (ex. "circuits/124N.json")
+    n_trips: int
+
+
+class CircuitIndex(BaseModel):
+    """Index des circuits + paramètres de fenêtre et modèle σ partagés."""
+    t0_seconds: float        # début de la fenêtre de simulation (sec depuis minuit)
+    horizon_s: float         # durée affichée
+    frame_interval: float    # cadence de rafraîchissement du cône (sec de sim)
+    traj_step: float         # résolution interne du cône (sec)
+    sigma: SigmaModel
+    circuits: list[CircuitIndexEntry]

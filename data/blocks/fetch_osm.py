@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -22,7 +23,14 @@ WEB_DATA   = Path(__file__).parent.parent.parent / "web" / "data"
 ROUTES_STM = WEB_DATA / "routes_stm.json"
 OUT_FILE   = WEB_DATA / "streets_montreal.json"
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Miroirs Overpass : on les essaie à tour de rôle. Le serveur principal est
+# fréquemment surchargé (504 Gateway Timeout / 429 Too Many Requests).
+OVERPASS_MIRRORS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
+MAX_ATTEMPTS = 6        # nombre total de tentatives (miroirs × essais)
 BUFFER_M     = 600      # marge autour des routes (mètres)
 LAT_M        = 111_000.0
 
@@ -78,11 +86,28 @@ def fetch_overpass(s: float, w: float, n: float, e: float) -> dict:
 """
     print(f"Requête Overpass (bbox {s:.4f},{w:.4f},{n:.4f},{e:.4f}) …")
     headers = {"User-Agent": "transit-3d/1.0 (github.com/SebastienBinet/Transit_3D_002)"}
-    resp = requests.post(OVERPASS_URL, data={"data": query}, headers=headers, timeout=150)
-    resp.raise_for_status()
-    data = resp.json()
-    print(f"  {len(data.get('elements', []))} segments de rue reçus.")
-    return data
+
+    last_exc: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        url = OVERPASS_MIRRORS[(attempt - 1) % len(OVERPASS_MIRRORS)]
+        try:
+            resp = requests.post(url, data={"data": query}, headers=headers, timeout=180)
+            resp.raise_for_status()
+            data = resp.json()  # peut lever si le corps n'est pas du JSON (page d'erreur HTML)
+            print(f"  {len(data.get('elements', []))} segments de rue reçus "
+                  f"(miroir : {url.split('/')[2]}).")
+            return data
+        except Exception as exc:
+            last_exc = exc
+            if attempt == MAX_ATTEMPTS:
+                break
+            wait = min(2 ** attempt, 60)  # 2, 4, 8, 16, 32 s (plafonné à 60)
+            print(f"  Tentative {attempt}/{MAX_ATTEMPTS} échouée sur {url.split('/')[2]} "
+                  f"({exc.__class__.__name__}) — nouvel essai dans {wait} s …", file=sys.stderr)
+            time.sleep(wait)
+
+    print(f"ERREUR : Overpass injoignable après {MAX_ATTEMPTS} tentatives.", file=sys.stderr)
+    raise last_exc  # type: ignore[misc]
 
 
 def build_graph(overpass_data: dict) -> dict:

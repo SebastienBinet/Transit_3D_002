@@ -10,10 +10,14 @@ import { logEvent } from './diagnostics.js';
 
 const LINE_COLORS = {
     L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44,
-    // Lignes STM réelles
-    "51": 0x4488ff, "165": 0xff8844, "11":  0x44cc44,
-    "129": 0xffcc00, "155": 0x44ccdd,
-    "66":  0xff4466, "144": 0x88ff44,
+    // Lignes STM réelles — deux directions (N/S) par ligne
+    "51N": 0x4488ff, "51S": 0x2255cc,
+    "165N": 0xff8844, "165S": 0xcc5511,
+    "11N": 0x44cc44, "11S": 0x229922,
+    "129N": 0xffcc00, "129S": 0xcc9900,
+    "155N": 0x44ccdd, "155S": 0x2299aa,
+    "66N": 0xff4466, "66S": 0xcc1133,
+    "144N": 0x88ff44, "144S": 0x55cc11,
     "124N": 0xff9900, "124S": 0xcc6600,
     "480N": 0x9900cc, "480S": 0x6600aa,
 };
@@ -45,10 +49,15 @@ let _prevDrawNow = 0;
 let currentSimTime = 0;
 export function updateSimTime(t) { currentSimTime = t; }
 
-// Affichage du ruban d'incertitude p10–p90. Désactivable depuis l'IHM pour
-// alléger la lecture (ne garde que la ligne p50).
-let showUncertainty = true;
+// Affichage du ruban d'incertitude p10–p90. Décoché par défaut (lecture allégée).
+let showUncertainty = false;
 export function setShowUncertainty(v) { showUncertainty = !!v; }
+
+// Affichage de la ligne médiane p50. Coché par défaut. Quand p50 ET p10–p90 sont
+// décochés, aucune trajectoire 3D n'est dessinée : il ne reste que les tracés au
+// sol et la position courante des autobus.
+let showP50 = true;
+export function setShowP50(v) { showP50 = !!v; }
 
 // timedObjects : uniquement les lignes de connexion dont le sommet inférieur
 // doit rester ancré à Y = 0 monde (bottom = currentSimTime × TIME_SCALE dans timeGroup)
@@ -467,16 +476,18 @@ function drawFrame(frame, routes) {
         const style = vehicleStyle(vehicle.vehicle_id);
 
         // Densification : insère les sommets de shape entre chaque pas de 60 s pour que
-        // les lignes 3D suivent les virages de la route.
-        const cumDist = shapeCumulativeDist(shape);
-        const dtraj   = densifyTrajFull(traj, cumDist);
+        // les lignes 3D suivent les virages de la route. Inutile si rien n'est dessiné.
+        const drawBand = showUncertainty && style.bandOp > 0.01;
+        const dtraj = (showP50 || drawBand)
+            ? densifyTrajFull(traj, shapeCumulativeDist(shape))
+            : null;
 
         // Trajectoire p50 (dans timeGroup, Y absolu)
-        const p50pts = dtraj.map(pt => {
-            const ll = progressToLatLon(pt.p50, shape);
-            return worldPos(ll.lat, ll.lon, pt.t);
-        });
-        if (p50pts.length >= 2) {
+        if (showP50 && dtraj.length >= 2) {
+            const p50pts = dtraj.map(pt => {
+                const ll = progressToLatLon(pt.p50, shape);
+                return worldPos(ll.lat, ll.lon, pt.t);
+            });
             if (style.bold) {
                 addBoldLine(p50pts, color, style.lineOp);
             } else {
@@ -488,7 +499,7 @@ function drawFrame(frame, routes) {
         }
 
         // Bande d'incertitude p10–p50–p90 (3 colonnes : la ligne p50 est sur l'arête centrale)
-        if (showUncertainty && dtraj.length >= 2 && style.bandOp > 0.01) {
+        if (drawBand && dtraj.length >= 2) {
             const verts = [];
             for (const pt of dtraj) {
                 const lo  = progressToLatLon(pt.p10, shape);

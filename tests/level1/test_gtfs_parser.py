@@ -143,12 +143,13 @@ def gtfs_cache(tmp_path, monkeypatch):
 
 
 def test_build_routes_selects_longest_trip(gtfs_cache):
-    """build_routes doit choisir T51A (3 arrêts) plutôt que T51B (2 arrêts)."""
+    """build_routes doit choisir T51A (3 arrêts) plutôt que T51B (2 arrêts).
+    Le GTFS synthétique n'a qu'une direction → un seul circuit, suffixé N/S."""
     cache, out = gtfs_cache
     routes = build_routes()
     assert len(routes) == 1
     r = routes[0]
-    assert r["line_id"] == "51"
+    assert r["line_id"] in ("51N", "51S")   # toutes les lignes sont bidirectionnelles
     assert len(r["stops"]) == 3   # A, B, C — trip le plus long
 
 
@@ -183,3 +184,55 @@ def test_build_routes_pydantic_valid(gtfs_cache):
     routes = build_routes()
     for r in routes:
         RouteGeometry.model_validate(r)   # ne doit pas lever d'exception
+
+
+def test_build_routes_emits_both_directions(tmp_path, monkeypatch):
+    """Avec deux directions GTFS, build_routes émet deux circuits aux suffixes
+    N/S distincts, chacun avec son gtfs_direction_id."""
+    cache = tmp_path / "gtfs"
+    cache.mkdir()
+    gtfs = {
+        "routes.txt": [{"route_id": "R51", "route_short_name": "51",
+                        "route_long_name": "Test 51"}],
+        "trips.txt": [
+            {"route_id": "R51", "trip_id": "T0", "shape_id": "S0",
+             "direction_id": "0", "service_id": "WD"},
+            {"route_id": "R51", "trip_id": "T1", "shape_id": "S1",
+             "direction_id": "1", "service_id": "WD"},
+        ],
+        "stop_times.txt": [
+            # Direction 0 : vers le sud (lat décroissante)
+            {"trip_id": "T0", "stop_id": "N", "arrival_time": "08:00:00", "stop_sequence": "1"},
+            {"trip_id": "T0", "stop_id": "S", "arrival_time": "08:10:00", "stop_sequence": "2"},
+            # Direction 1 : vers le nord
+            {"trip_id": "T1", "stop_id": "S", "arrival_time": "08:00:00", "stop_sequence": "1"},
+            {"trip_id": "T1", "stop_id": "N", "arrival_time": "08:10:00", "stop_sequence": "2"},
+        ],
+        "stops.txt": [
+            {"stop_id": "N", "stop_name": "Nord", "stop_lat": "45.560", "stop_lon": "-73.640"},
+            {"stop_id": "S", "stop_name": "Sud",  "stop_lat": "45.500", "stop_lon": "-73.640"},
+        ],
+        "shapes.txt": [
+            {"shape_id": "S0", "shape_pt_lat": "45.560", "shape_pt_lon": "-73.640", "shape_pt_sequence": "1"},
+            {"shape_id": "S0", "shape_pt_lat": "45.500", "shape_pt_lon": "-73.640", "shape_pt_sequence": "2"},
+            {"shape_id": "S1", "shape_pt_lat": "45.500", "shape_pt_lon": "-73.640", "shape_pt_sequence": "1"},
+            {"shape_id": "S1", "shape_pt_lat": "45.560", "shape_pt_lon": "-73.640", "shape_pt_sequence": "2"},
+        ],
+        "calendar.txt": [
+            {"service_id": "WD", "monday": "1", "tuesday": "1", "wednesday": "1",
+             "thursday": "1", "friday": "1", "saturday": "0", "sunday": "0",
+             "start_date": "20260101", "end_date": "20261231"},
+        ],
+    }
+    for fname, rows in gtfs.items():
+        write_csv(cache / fname, rows)
+    monkeypatch.setattr("data.blocks.build_routes.CACHE_DIR", cache)
+    monkeypatch.setattr("data.blocks.build_routes.TARGET_ROUTES", {"51"})
+    monkeypatch.setattr("data.blocks.build_routes.BIDIRECTIONAL", {"51"})
+
+    routes = build_routes()
+    line_ids = sorted(r["line_id"] for r in routes)
+    assert line_ids == ["51N", "51S"], line_ids
+    # Chaque circuit porte son gtfs_direction_id
+    dirs = {r["line_id"]: r["gtfs_direction_id"] for r in routes}
+    assert set(dirs.values()) == {"0", "1"}

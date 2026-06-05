@@ -20,22 +20,21 @@ OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.
 # ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
 TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480"}
 
-# Lignes pour lesquelles on exporte les deux directions (N et S)
-BIDIRECTIONAL = {"124", "480"}
+# On exporte les DEUX directions (N et S) pour toutes les lignes.
+BIDIRECTIONAL = set(TARGET_ROUTES)
 
-# Couleur hex par ligne (pour l'IHM — non stockée dans le JSON, référence pour renderer.js)
+# Couleur hex par ligne-direction (pour l'IHM — non stockée dans le JSON,
+# référence pour renderer.js). Chaque ligne : N = teinte de base, S = variante plus foncée.
 LINE_COLORS_HEX = {
-    "51":   "#4488ff",   # bleu
-    "165":  "#ff8844",   # orange
-    "11":   "#44cc44",   # vert
-    "129":  "#ffcc00",   # jaune
-    "155":  "#44ccdd",   # cyan
-    "66":   "#ff4466",   # rose
-    "144":  "#88ff44",   # vert lime
-    "124N": "#ff9900",   # orange foncé
-    "124S": "#cc6600",   # brun-orange
-    "480N": "#9900cc",   # violet
-    "480S": "#6600aa",   # mauve foncé
+    "51N":  "#4488ff", "51S":  "#2255cc",   # bleu
+    "165N": "#ff8844", "165S": "#cc5511",   # orange
+    "11N":  "#44cc44", "11S":  "#229922",   # vert
+    "129N": "#ffcc00", "129S": "#cc9900",   # jaune
+    "155N": "#44ccdd", "155S": "#2299aa",   # cyan
+    "66N":  "#ff4466", "66S":  "#cc1133",   # rose
+    "144N": "#88ff44", "144S": "#55cc11",   # vert lime
+    "124N": "#ff9900", "124S": "#cc6600",   # orange foncé / brun-orange
+    "480N": "#9900cc", "480S": "#6600aa",   # violet / mauve foncé
 }
 
 LAT_M = 111_000.0
@@ -235,10 +234,21 @@ def build_routes() -> list[dict]:
                 by_dir[d] = tid
 
         if short_name in BIDIRECTIONAL:
-            # Émettre une entrée par direction avec suffixe N/S
-            for dir_id, best_trip in sorted(by_dir.items()):
-                suf    = direction_suffix(best_trip)
-                lid    = f"{short_name}{suf}"
+            # Émettre une entrée par direction avec suffixe N/S.
+            # Quand deux directions existent, garantir des suffixes distincts :
+            # la plus « vers le sud » reçoit S, l'autre N (évite une collision 51N/51N).
+            items = sorted(by_dir.items())
+            if len(items) >= 2:
+                ranked = sorted(items, key=lambda kv: southbound_score(kv[1]), reverse=True)
+                suffix_of = {ranked[0][0]: "S", ranked[1][0]: "N"}
+                for dir_id, best_trip in ranked[2:]:   # rare : >2 directions
+                    suffix_of[dir_id] = direction_suffix(best_trip)
+            else:
+                dir_id, best_trip = items[0]
+                suffix_of = {dir_id: direction_suffix(best_trip)}
+
+            for dir_id, best_trip in items:
+                lid    = f"{short_name}{suffix_of[dir_id]}"
                 result = build_one_direction(short_name, best_trip, lid, dir_id)
                 if result:
                     result_routes.append(result)

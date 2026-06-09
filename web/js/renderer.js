@@ -68,10 +68,8 @@ export function setShowP50(v) { showP50 = !!v; refreshTimeGridVisible(); }
 // (p50 ou p10–p90) est affichée ; sinon il ne reste que la carte au sol.
 function refreshTimeGridVisible() {
     if (!timeGridGroup) return;
-    const v = showP50 || showUncertainty;
-    timeGridGroup.visible = v;
-    // CSS2DRenderer ignore la visibilité des ancêtres : forcer sur chaque label.
-    for (const label of timeGridLabels) label.visible = v;
+    timeGridGroup.visible = showP50 || showUncertainty;
+    // La visibilité fine de chaque label (temps passé) est gérée dans la boucle RAF.
 }
 
 // sec depuis minuit → heure locale lisible "7h30" (modulo 24 h).
@@ -108,12 +106,14 @@ function buildTimeGrid(t0, horizonS, bounds) {
         timeGridGroup.add(ring);
 
         const text = formatLocalClock(tAbs);
+        const tAbsRel = tAbs - t0;   // secondes relatives à T0 (seuil de masquage)
         for (const [x, z] of corners) {
             const div = document.createElement('div');
             div.className = 'time-grid-label';
             div.textContent = text;
             const label = new CSS2DObject(div);
             label.position.set(x, y, z);
+            label.tAbsRel = tAbsRel;
             timeGridGroup.add(label);
             timeGridLabels.push(label);
         }
@@ -446,6 +446,14 @@ export function init(canvas, config) {
         // Décalage temporel lisse : toute la scène espace-temps glisse sans saut
         timeGroup.position.y = -currentSimTime * TIME_SCALE;
 
+        // Masquer les étiquettes des étages déjà passés (CSS2DRenderer ignore la visibilité parent)
+        if (timeGridLabels.length) {
+            const gridOn = showP50 || showUncertainty;
+            for (const label of timeGridLabels) {
+                label.visible = gridOn && label.tAbsRel > currentSimTime;
+            }
+        }
+
         // Mise à jour lisse des objets temporels entre les frames
         for (const item of timedObjects) {
             if (item._isLine) {
@@ -472,6 +480,8 @@ export function init(canvas, config) {
         labelRenderer.render(scene, camera);
     })();
 }
+
+export function getAzimuthalAngle() { return controls ? controls.getAzimuthalAngle() : 0; }
 
 export function setVizMode(name) {
     activeVizMode?.dispose();

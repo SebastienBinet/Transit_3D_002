@@ -59,7 +59,7 @@
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 
     #prob-display {
-      position: fixed; top: 16px; right: 16px;
+      position: fixed; top: 16px; right: 68px;
       background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
       border: 1px solid #334; font-size: 12px; line-height: 2;
     }
@@ -75,6 +75,13 @@
       background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 6px;
       border: 1px solid #334; font-size: 10px; color: #667; font-family: monospace;
       line-height: 1.7;
+    }
+
+    /* Rose des vents — toujours visible en haut à droite, tourne avec l'azimut caméra */
+    #compass {
+      position: fixed; top: 16px; right: 16px; z-index: 15;
+      width: 52px; height: 52px; pointer-events: none; opacity: 0.80;
+      transform-origin: center center;
     }
   </style>
 </head>
@@ -93,6 +100,22 @@
     <div>P(attraper L17) : <span id="prob-l17">—</span></div>
     <div id="suggestion" style="margin-top:6px; font-weight:bold; font-size:13px; color:#ffee44">—</div>
     <div id="arrival" style="margin-top:3px; font-size:11px; color:#aabbcc">Arrivée estimée : —</div>
+  </div>
+
+  <!-- Rose des vents : tourne avec l'azimut caméra, posée en haut à droite -->
+  <div id="compass">
+    <svg viewBox="0 0 52 52" width="52" height="52" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="26" cy="26" r="24" fill="rgba(0,0,0,0.55)" stroke="#334455" stroke-width="1.5"/>
+      <!-- Flèche Nord (rouge, vers le haut) -->
+      <polygon points="26,4 22,26 26,22 30,26" fill="#dd4444"/>
+      <!-- Flèche Sud (gris, vers le bas) -->
+      <polygon points="26,48 22,26 26,30 30,26" fill="#557788"/>
+      <!-- Centre -->
+      <circle cx="26" cy="26" r="2.5" fill="#aabbcc"/>
+      <!-- Étiquette N (restera en haut de la flèche quand la rose tourne) -->
+      <text x="26" y="3.5" text-anchor="middle" dominant-baseline="auto"
+            font-size="8" fill="#ee7777" font-family="monospace" font-weight="bold">N</text>
+    </svg>
   </div>
 
   <div id="debug-overlay">
@@ -142,7 +165,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50 } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
@@ -405,6 +428,9 @@
       }
       if (player) updateSimTime(player.simTime);
       if (lastTs !== null) updateDebug(rawDeltaMs);
+      // Rose des vents : rotation inverse de l'azimut caméra → N pointe vers le Nord géographique
+      document.getElementById('compass').style.transform =
+        `rotate(${(-getAzimuthalAngle() * 180 / Math.PI).toFixed(1)}deg)`;
       lastTs = ts;
     }
 

@@ -1,0 +1,139 @@
+{
+  "t0_seconds": 25200.0,
+  "horizon_s": 3600.0,
+  "frame_interval": 5.0,
+  "traj_step": 60.0,
+  "sigma": {
+    "kind": "power",
+    "coeff_min": 3.0,
+    "exp": 0.301
+  },
+  "circuits": [
+    {
+      "line_id": "11N",
+      "gtfs_direction_id": "1",
+      "color": "#44cc44",
+      "file": "circuits/11N.json",
+      "n_trips": 2
+    },
+    {
+      "line_id": "11S",
+      "gtfs_direction_id": "0",
+      "color": "#229922",
+      "file": "circuits/11S.json",
+      "n_trips": 3
+    },
+    {
+      "line_id": "124N",
+      "gtfs_direction_id": "1",
+      "color": "#ff9900",
+      "file": "circuits/124N.json",
+      "n_trips": 6
+    },
+    {
+      "line_id": "124S",
+      "gtfs_direction_id": "0",
+      "color": "#cc6600",
+      "file": "circuits/124S.json",
+      "n_trips": 5
+    },
+    {
+      "line_id": "129N",
+      "gtfs_direction_id": "1",
+      "color": "#ffcc00",
+      "file": "circuits/129N.json",
+      "n_trips": 15
+    },
+    {
+      "line_id": "129S",
+      "gtfs_direction_id": "0",
+      "color": "#cc9900",
+      "file": "circuits/129S.json",
+      "n_trips": 4
+    },
+    {
+      "line_id": "144N",
+      "gtfs_direction_id": "0",
+      "color": "#88ff44",
+      "file": "circuits/144N.json",
+      "n_trips": 7
+    },
+    {
+      "line_id": "144S",
+      "gtfs_direction_id": "1",
+      "color": "#55cc11",
+      "file": "circuits/144S.json",
+      "n_trips": 6
+    },
+    {
+      "line_id": "155N",
+      "gtfs_direction_id": "0",
+      "color": "#44ccdd",
+      "file": "circuits/155N.json",
+      "n_trips": 7
+    },
+    {
+      "line_id": "155S",
+      "gtfs_direction_id": "1",
+      "color": "#2299aa",
+      "file": "circuits/155S.json",
+      "n_trips": 6
+    },
+    {
+      "line_id": "165N",
+      "gtfs_direction_id": "1",
+      "color": "#ff8844",
+      "file": "circuits/165N.json",
+      "n_trips": 15
+    },
+    {
+      "line_id": "165S",
+      "gtfs_direction_id": "0",
+      "color": "#cc5511",
+      "file": "circuits/165S.json",
+      "n_trips": 22
+    },
+    {
+      "line_id": "480N",
+      "gtfs_direction_id": "1",
+      "color": "#9900cc",
+      "file": "circuits/480N.json",
+      "n_trips": 0
+    },
+    {
+      "line_id": "480S",
+      "gtfs_direction_id": "0",
+      "color": "#6600aa",
+      "file": "circuits/480S.json",
+      "n_trips": 9
+    },
+    {
+      "line_id": "51N",
+      "gtfs_direction_id": "0",
+      "color": "#4488ff",
+      "file": "circuits/51N.json",
+      "n_trips": 40
+    },
+    {
+      "line_id": "51S",
+      "gtfs_direction_id": "1",
+      "color": "#2255cc",
+      "file": "circuits/51S.json",
+      "n_trips": 27
+    },
+    {
+      "line_id": "66N",
+      "gtfs_direction_id": "0",
+      "color": "#ff4466",
+      "file": "circuits/66N.json",
+      "n_trips": 5
+    },
+    {
+      "line_id": "66S",
+      "gtfs_direction_id": "1",
+      "color": "#cc1133",
+      "file": "circuits/66S.json",
+      "n_trips": 5
+    }
+  ]
+}

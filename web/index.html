@@ -59,7 +59,7 @@
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 
     #prob-display {
-      position: fixed; top: 16px; right: 16px;
+      position: fixed; top: 16px; right: 68px;
       background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
       border: 1px solid #334; font-size: 12px; line-height: 2;
     }
@@ -75,6 +75,13 @@
       background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 6px;
       border: 1px solid #334; font-size: 10px; color: #667; font-family: monospace;
       line-height: 1.7;
+    }
+
+    /* Rose des vents — toujours visible en haut à droite, tourne avec l'azimut caméra */
+    #compass {
+      position: fixed; top: 16px; right: 16px; z-index: 15;
+      width: 52px; height: 52px; pointer-events: none; opacity: 0.80;
+      transform-origin: center center;
     }
   </style>
 </head>
@@ -95,6 +102,22 @@
     <div id="arrival" style="margin-top:3px; font-size:11px; color:#aabbcc">Arrivée estimée : —</div>
   </div>
 
+  <!-- Rose des vents : tourne avec l'azimut caméra, posée en haut à droite -->
+  <div id="compass">
+    <svg viewBox="0 0 52 52" width="52" height="52" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="26" cy="26" r="24" fill="rgba(0,0,0,0.55)" stroke="#334455" stroke-width="1.5"/>
+      <!-- Flèche Nord (rouge, vers le haut) -->
+      <polygon points="26,4 22,26 26,22 30,26" fill="#dd4444"/>
+      <!-- Flèche Sud (gris, vers le bas) -->
+      <polygon points="26,48 22,26 26,30 30,26" fill="#557788"/>
+      <!-- Centre -->
+      <circle cx="26" cy="26" r="2.5" fill="#aabbcc"/>
+      <!-- Étiquette N (restera en haut de la flèche quand la rose tourne) -->
+      <text x="26" y="3.5" text-anchor="middle" dominant-baseline="auto"
+            font-size="8" fill="#ee7777" font-family="monospace" font-weight="bold">N</text>
+    </svg>
+  </div>
+
   <div id="debug-overlay">
     tick Δ : <span id="dbg-tick-delta">—</span><br>
     tick max Δ : <span id="dbg-tick-max">—</span><br>
@@ -113,6 +136,7 @@
       <option value="3">Cas 3 — cône de marche</option>
       <option value="4">Cas 4 — lignes STM réelles</option>
       <option value="5">Cas 5 — STM simulation horaires</option>
+      <option value="6">Cas 6 — Trajets 51∩66 → 480∩144</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -142,10 +166,16 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50 } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0 } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
+    import { createJourneyModel } from './js/journey-model.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
+
+    const JOURNEY_COLORS = [
+      0xff5533, 0x33dd77, 0x4488ff, 0xffdd22,
+      0xff44cc, 0x33dddd, 0xff9922, 0xaaff33,
+    ];
 
     const canvas = document.getElementById('canvas');
     let player = null;
@@ -188,13 +218,64 @@
         + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
     }
 
+    // Légende pour Cas 6 : une ligne par trajet avec couleur + heure d'arrivée
+    function setJourneyLegend(journeysData) {
+      const rows = journeysData.journeys.map((jr, i) => {
+        const color = '#' + (JOURNEY_COLORS[i % JOURNEY_COLORS.length]).toString(16).padStart(6, '0');
+        const arrH = Math.floor(jr.arrival_s / 3600);
+        const arrM = Math.floor((jr.arrival_s % 3600) / 60);
+        const arrTime = `${arrH}h${String(arrM).padStart(2,'0')}`;
+        const lineNames = jr.legs.filter(l => l.type === 'bus').map(l => l.base).join(' → ');
+        return `<div><span class="dot" style="background:${color}"></span>`
+             + `Trajet ${jr.rank} · ${lineNames} · arr. ${arrTime}</div>`;
+      }).join('');
+      document.getElementById('legend').innerHTML =
+        `<div style="margin-bottom:6px; color:#aac; font-weight:bold">Trajets 51∩66 → 480∩144</div>`
+        + rows
+        + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
+    }
+
     function teardownWalkMode() {
       if (walkMode) { walkMode.dispose(); walkMode = null; }
     }
 
+    async function loadJourneyCase6() {
+      let journeysData, bounds, circuitsData;
+      try {
+        [journeysData, bounds, circuitsData] = await Promise.all([
+          fetch('./data/journeys_case6.json').then(r => r.json()),
+          fetch('./data/map_bounds.json').then(r => r.json()),
+          loadCircuits('./data'),
+        ]);
+      } catch (err) {
+        alert(`Les données du Cas 6 sont introuvables.\n\n${err.message}\n\nVérifier que journeys_case6.json et les circuits STM sont présents dans web/data/.`);
+        return;
+      }
+
+      const model = createJourneyModel({ journeysData, circuits: circuitsData.circuits });
+      routes = model.routes;
+
+      setJourneyLegend(journeysData);
+      init(canvas, {
+        routes,
+        transferWindows: [],
+        mapBackground: { url: './data/map_montreal.png', bounds },
+        timeGrid: { t0Seconds: model.t0Seconds, horizonS: model.horizonS, bounds },
+      });
+
+      const colors = journeysData.journeys.map((_, i) => JOURNEY_COLORS[i % JOURNEY_COLORS.length]);
+      initPassengers(journeysData.journeys.length, colors);
+      setPassengerT0(model.t0Seconds);
+      setPassengerSource(tAbs => model.getPassengerPositions(tAbs));
+
+      player = model;
+      player.setSpeed(Number(document.getElementById('speed-select').value));
+      update();
+    }
+
     async function load(scenarioId) {
       teardownWalkMode();
-      restoreStoryLegend();   // cas 5 la remplacera par la légende des circuits
+      restoreStoryLegend();   // cas 5/6 la remplaceront par leur propre légende
       if (scenarioId === '3') {
         loadWalkCase();
         return;
@@ -205,6 +286,10 @@
       }
       if (scenarioId === '5') {
         await loadStmSimulationCase();
+        return;
+      }
+      if (scenarioId === '6') {
+        await loadJourneyCase6();
         return;
       }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
@@ -405,6 +490,9 @@
       }
       if (player) updateSimTime(player.simTime);
       if (lastTs !== null) updateDebug(rawDeltaMs);
+      // Rose des vents : rotation inverse de l'azimut caméra → N pointe vers le Nord géographique
+      document.getElementById('compass').style.transform =
+        `rotate(${(-getAzimuthalAngle() * 180 / Math.PI).toFixed(1)}deg)`;
       lastTs = ts;
     }
 

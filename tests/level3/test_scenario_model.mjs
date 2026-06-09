@@ -130,6 +130,14 @@ test('model : expose routes', () => {
     assert.equal(model.routes[0].line_id, 'T');
 });
 
+test('model : expose t0Seconds et horizonS (heure locale + grille temporelle)', () => {
+    const model = createScheduleModel(makeIndexAndCircuits(25200));
+    assert.equal(model.t0Seconds, 25200);   // 07:00:00
+    assert.equal(model.horizonS, 120);
+    // heure locale = t0 + simTime ; à sim 0 → 07:00:00
+    assert.equal(model.t0Seconds + model.simTime, 25200);
+});
+
 test('model : frame initiale à sim_time 0, seuls les passages actifs présents', () => {
     const model = createScheduleModel(makeIndexAndCircuits(1000));
     const f = model.frame;

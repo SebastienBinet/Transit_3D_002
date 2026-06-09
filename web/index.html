@@ -34,12 +34,28 @@
       padding: 6px 8px; border-radius: 5px; font-family: monospace; font-size: 13px;
     }
     #time-display { min-width: 90px; text-align: center; font-size: 13px; color: #88aadd; }
+    #clock-display {
+      min-width: 78px; text-align: center; font-size: 13px; font-weight: bold;
+      color: #ffd877; letter-spacing: 0.5px;
+    }
+
+    /* Les panneaux d'interface restent au-dessus de la couche d'étiquettes CSS2D (z-index:1) */
+    #hud, #legend, #prob-display, #debug-overlay, #build-info { z-index: 10; }
+
+    /* Étiquettes d'heure aux coins des étages de 30 min (rendu CSS2D) */
+    .time-grid-label {
+      color: #aac6ee; font-family: monospace; font-size: 11px;
+      background: rgba(8,12,24,0.55); padding: 1px 5px; border-radius: 4px;
+      pointer-events: none; white-space: nowrap;
+    }
 
     #legend {
       position: fixed; top: 16px; left: 16px;
       background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
       border: 1px solid #334; font-size: 12px; line-height: 1.8;
+      max-height: 78vh; overflow-y: auto;
     }
+    #legend .legend-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 
     #prob-display {
@@ -108,6 +124,7 @@
       <option value="120">×120</option>
     </select>
     <span id="time-display">T = 0 s</span>
+    <span id="clock-display" title="Heure locale (horaires réels STM)"></span>
     <select id="viz-mode-select" title="Mode de visualisation">
       <option value="windows">Fenêtres</option>
       <option value="fork">Fourche</option>
@@ -136,12 +153,48 @@
     let lastTs = null;
     let walkMode = null;
 
+    // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
+    const storyLegendHTML = document.getElementById('legend').innerHTML;
+    function restoreStoryLegend() {
+      document.getElementById('legend').innerHTML = storyLegendHTML;
+    }
+
+    // "51N" → "51 Nord", "165S" → "165 Sud". Sinon renvoie l'identifiant tel quel.
+    function lineDisplayName(lineId) {
+      const m = /^(\d+)([NS])$/.exec(lineId);
+      if (!m) return lineId;
+      return `${m[1]} ${m[2] === 'N' ? 'Nord' : 'Sud'}`;
+    }
+
+    // Légende dynamique du cas 5 : un point coloré + nom par circuit, trié par
+    // numéro de ligne puis Nord avant Sud. Les circuits sans passage sont grisés.
+    function setCircuitLegend(indexCircuits) {
+      const sorted = [...indexCircuits].sort((a, b) => {
+        const na = parseInt(a.line_id, 10), nb = parseInt(b.line_id, 10);
+        if (na !== nb) return na - nb;
+        return a.line_id.localeCompare(b.line_id);
+      });
+      const rows = sorted.map(c => {
+        const color = c.color ?? '#888';
+        const empty = (c.n_trips === 0);
+        const style = empty ? ' style="opacity:0.4"' : '';
+        const suffix = empty ? ' <span style="color:#888">(aucun passage)</span>' : '';
+        return `<div${style}><span class="dot" style="background:${color}"></span>`
+             + `${lineDisplayName(c.line_id)}${suffix}</div>`;
+      }).join('');
+      document.getElementById('legend').innerHTML =
+        `<div style="margin-bottom:6px; color:#aac; font-weight:bold">Circuits STM</div>`
+        + `<div class="legend-cols">${rows}</div>`
+        + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
+    }
+
     function teardownWalkMode() {
       if (walkMode) { walkMode.dispose(); walkMode = null; }
     }
 
     async function load(scenarioId) {
       teardownWalkMode();
+      restoreStoryLegend();   // cas 5 la remplacera par la légende des circuits
       if (scenarioId === '3') {
         loadWalkCase();
         return;
@@ -167,13 +220,14 @@
       // Cas 5 : géométrie STM réelle + carte OSM + cônes d'incertitude
       // reconstruits à la volée depuis les horaires compacts par circuit
       // (fichiers circuits/*.json + circuits_index.json, schéma scalable).
-      let model, bounds;
+      let model, bounds, indexCircuits;
       try {
         const [data, b] = await Promise.all([
           loadCircuits('./data'),
           fetch('./data/map_bounds.json').then(r => r.json()),
         ]);
         bounds = b;
+        indexCircuits = data.index.circuits;
         model = createScheduleModel(data);
       } catch (err) {
         alert(
@@ -184,11 +238,13 @@
         return;
       }
       routes = model.routes;
+      setCircuitLegend(indexCircuits);
       init(canvas, {
         routes,
         transferWindows: [],
         stopEvents: [],
         mapBackground: { url: './data/map_montreal.png', bounds },
+        timeGrid: { t0Seconds: model.t0Seconds, horizonS: model.horizonS, bounds },
       });
       player = model;
       player.setSpeed(Number(document.getElementById('speed-select').value));
@@ -228,10 +284,26 @@
     }
 
     // Mise à jour DOM : appelée à chaque tick RAF pour un affichage fluide
+    function fmtLocalClock(totalSec) {
+      const s = ((Math.round(totalSec) % 86400) + 86400) % 86400;
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      return `${h}h${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    }
+
     function updateHud() {
       if (!player || !routes) return;
       document.getElementById('time-display').textContent =
         `T = ${Math.round(player.simTime)} s`;
+      // Heure locale réelle quand le scénario porte des horaires (cas 5).
+      const clockEl = document.getElementById('clock-display');
+      if (player.t0Seconds != null) {
+        clockEl.style.display = '';
+        clockEl.textContent = '🕐 ' + fmtLocalClock(player.t0Seconds + player.simTime);
+      } else {
+        clockEl.style.display = 'none';
+      }
       const transfers = player.frame?.transfers ?? [];
       const isStoryMode = !!player.frame?.vehicles?.find(v => v.vehicle_id === 'L42-util');
       const probDisplay = document.getElementById('prob-display');

@@ -1,6 +1,7 @@
 // Seul fichier qui importe Three.js
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { progressToLatLon, estimateArrival, estimateTimeAtProgress, interpolate, progressToHeading, shapeCumulativeDist, densifyTrajFull } from './interpolation.js';
 import { create as createWindowsMode } from './viz-mode-windows.js';
 import { create as createForkMode }   from './viz-mode-fork.js';
@@ -27,12 +28,16 @@ const LAT_M = 111_000;
 const WALKING_SPEED_MPS = 1.4;   // vitesse de marche typique
 const MAX_ROT_PER_S = Math.PI / 2; // 90°/s — limite de rotation des icônes d'autobus
 
-let scene, camera, webglRenderer, controls;
+let scene, camera, webglRenderer, controls, labelRenderer;
 // timeGroup : groupe décalé en Y = −currentSimTime × TIME_SCALE à 60 fps.
 // Tous les objets espace-temps (trajectoires, drapeaux d'arrivée, viz modes, bonhomme)
 // y sont ajoutés avec une position Y absolue (t × TIME_SCALE).
 // Le décalage continu élimine les sauts discrets sans rebuilder les géométries.
 let timeGroup;
+// Grille temporelle : un rectangle (aux dimensions de la carte) toutes les 30 min,
+// avec l'heure locale étiquetée aux 4 coins. Dans timeGroup → glisse avec le temps.
+let timeGridGroup = null;
+const timeGridLabels = [];   // CSS2DObject — visibilité gérée séparément des Line
 let latCenter, lonCenter, lonM;
 let vehicleObjects = []; // dans timeGroup — vidés/reconstruits à chaque frame
 let groundObjects  = []; // dans scene (Y = 0) — icônes d'autobus + drapeaux au sol
@@ -51,13 +56,71 @@ export function updateSimTime(t) { currentSimTime = t; }
 
 // Affichage du ruban d'incertitude p10–p90. Décoché par défaut (lecture allégée).
 let showUncertainty = false;
-export function setShowUncertainty(v) { showUncertainty = !!v; }
+export function setShowUncertainty(v) { showUncertainty = !!v; refreshTimeGridVisible(); }
 
 // Affichage de la ligne médiane p50. Coché par défaut. Quand p50 ET p10–p90 sont
 // décochés, aucune trajectoire 3D n'est dessinée : il ne reste que les tracés au
 // sol et la position courante des autobus.
 let showP50 = true;
-export function setShowP50(v) { showP50 = !!v; }
+export function setShowP50(v) { showP50 = !!v; refreshTimeGridVisible(); }
+
+// La grille temporelle n'a de sens que si au moins une couche espace-temps
+// (p50 ou p10–p90) est affichée ; sinon il ne reste que la carte au sol.
+function refreshTimeGridVisible() {
+    if (!timeGridGroup) return;
+    const v = showP50 || showUncertainty;
+    timeGridGroup.visible = v;
+    // CSS2DRenderer ignore la visibilité des ancêtres : forcer sur chaque label.
+    for (const label of timeGridLabels) label.visible = v;
+}
+
+// sec depuis minuit → heure locale lisible "7h30" (modulo 24 h).
+function formatLocalClock(totalSec) {
+    const s = ((Math.round(totalSec) % 86400) + 86400) % 86400;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h}h${m.toString().padStart(2, '0')}`;
+}
+
+// Construit un rectangle horizontal toutes les 30 min entre t0 et t0+2·horizon
+// (couvre toute la plage qui défilera), aux dimensions de la carte, avec l'heure
+// locale aux 4 coins. Ajouté dans timeGroup pour glisser avec le temps.
+function buildTimeGrid(t0, horizonS, bounds) {
+    timeGridGroup = new THREE.Group();
+    timeGridLabels.length = 0;
+
+    const xMin = (bounds.lon_min - lonCenter) * lonM;
+    const xMax = (bounds.lon_max - lonCenter) * lonM;
+    const zNorth = -(bounds.lat_max - latCenter) * LAT_M;
+    const zSouth = -(bounds.lat_min - latCenter) * LAT_M;
+    const corners = [[xMin, zNorth], [xMax, zNorth], [xMax, zSouth], [xMin, zSouth]];
+
+    const STEP_S = 1800;   // 30 minutes
+    const startMark = Math.floor(t0 / STEP_S) * STEP_S;
+    const endMark   = t0 + 2 * horizonS;
+    for (let tAbs = startMark; tAbs <= endMark + 1; tAbs += STEP_S) {
+        const y = (tAbs - t0) * TIME_SCALE;
+        const ring = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(
+                corners.map(([x, z]) => new THREE.Vector3(x, y, z))),
+            new THREE.LineBasicMaterial({ color: 0x5577aa, opacity: 0.30, transparent: true }),
+        );
+        timeGridGroup.add(ring);
+
+        const text = formatLocalClock(tAbs);
+        for (const [x, z] of corners) {
+            const div = document.createElement('div');
+            div.className = 'time-grid-label';
+            div.textContent = text;
+            const label = new CSS2DObject(div);
+            label.position.set(x, y, z);
+            timeGridGroup.add(label);
+            timeGridLabels.push(label);
+        }
+    }
+    timeGroup.add(timeGridGroup);
+    refreshTimeGridVisible();
+}
 
 // timedObjects : uniquement les lignes de connexion dont le sommet inférieur
 // doit rester ancré à Y = 0 monde (bottom = currentSimTime × TIME_SCALE dans timeGroup)
@@ -191,7 +254,10 @@ function makeStopMarker(color) {
 }
 
 export function init(canvas, config) {
-    const { routes, transferWindows: tw = [], mapBackground = null, stopEvents: se = [] } = config;
+    const { routes, transferWindows: tw = [], mapBackground = null, stopEvents: se = [], timeGrid = null } = config;
+
+    timeGridGroup = null;
+    timeGridLabels.length = 0;
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));
@@ -217,6 +283,17 @@ export function init(canvas, config) {
     webglRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     webglRenderer.setSize(w, h, false);
     webglRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    // Renderer CSS2D pour les étiquettes d'heure (texte HTML net, superposé au canvas).
+    // Créé une seule fois et réutilisé ; on vide ses div lors d'un changement de scène.
+    if (!labelRenderer) {
+        labelRenderer = new CSS2DRenderer();
+        labelRenderer.domElement.style.cssText =
+            'position:absolute; top:0; left:0; pointer-events:none; z-index:1;';
+        canvas.parentElement.appendChild(labelRenderer.domElement);
+    }
+    labelRenderer.domElement.replaceChildren();   // retirer les étiquettes de la scène précédente
+    labelRenderer.setSize(w, h);
 
     controls = new OrbitControls(camera, webglRenderer.domElement);
     controls.target.set(-400, 3000, 1100);
@@ -333,10 +410,16 @@ export function init(canvas, config) {
         new THREE.LineBasicMaterial({ color: 0x88aaff, opacity: 0.5, transparent: true }),
     ));
 
+    // Grille temporelle (étages de 30 min) — uniquement pour les cas avec horaires réels.
+    if (timeGrid && timeGrid.bounds) {
+        buildTimeGrid(timeGrid.t0Seconds, timeGrid.horizonS, timeGrid.bounds);
+    }
+
     window.addEventListener('resize', () => {
         const w = canvas.clientWidth, h = canvas.clientHeight;
         camera.aspect = w / h; camera.updateProjectionMatrix();
         webglRenderer.setSize(w, h, false);
+        labelRenderer.setSize(w, h);
     });
 
     // vizCtx.scene = timeGroup : les modes viz ajoutent leurs objets dans l'espace-temps.
@@ -386,6 +469,7 @@ export function init(canvas, config) {
 
         controls.update();
         webglRenderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
     })();
 }
 

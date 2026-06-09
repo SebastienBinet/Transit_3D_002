@@ -144,6 +144,8 @@ export function createScheduleModel({ index, circuits }) {
 
     return {
         routes,
+        t0Seconds: t0,
+        horizonS: horizon,
         get frame() { return cached; },
         get simTime() { return now; },
         get isPlaying() { return playing; },

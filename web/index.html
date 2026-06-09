@@ -53,7 +53,9 @@
       position: fixed; top: 16px; left: 16px;
       background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 8px;
       border: 1px solid #334; font-size: 12px; line-height: 1.8;
+      max-height: 78vh; overflow-y: auto;
     }
+    #legend .legend-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 
     #prob-display {
@@ -151,12 +153,48 @@
     let lastTs = null;
     let walkMode = null;
 
+    // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
+    const storyLegendHTML = document.getElementById('legend').innerHTML;
+    function restoreStoryLegend() {
+      document.getElementById('legend').innerHTML = storyLegendHTML;
+    }
+
+    // "51N" → "51 Nord", "165S" → "165 Sud". Sinon renvoie l'identifiant tel quel.
+    function lineDisplayName(lineId) {
+      const m = /^(\d+)([NS])$/.exec(lineId);
+      if (!m) return lineId;
+      return `${m[1]} ${m[2] === 'N' ? 'Nord' : 'Sud'}`;
+    }
+
+    // Légende dynamique du cas 5 : un point coloré + nom par circuit, trié par
+    // numéro de ligne puis Nord avant Sud. Les circuits sans passage sont grisés.
+    function setCircuitLegend(indexCircuits) {
+      const sorted = [...indexCircuits].sort((a, b) => {
+        const na = parseInt(a.line_id, 10), nb = parseInt(b.line_id, 10);
+        if (na !== nb) return na - nb;
+        return a.line_id.localeCompare(b.line_id);
+      });
+      const rows = sorted.map(c => {
+        const color = c.color ?? '#888';
+        const empty = (c.n_trips === 0);
+        const style = empty ? ' style="opacity:0.4"' : '';
+        const suffix = empty ? ' <span style="color:#888">(aucun passage)</span>' : '';
+        return `<div${style}><span class="dot" style="background:${color}"></span>`
+             + `${lineDisplayName(c.line_id)}${suffix}</div>`;
+      }).join('');
+      document.getElementById('legend').innerHTML =
+        `<div style="margin-bottom:6px; color:#aac; font-weight:bold">Circuits STM</div>`
+        + `<div class="legend-cols">${rows}</div>`
+        + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
+    }
+
     function teardownWalkMode() {
       if (walkMode) { walkMode.dispose(); walkMode = null; }
     }
 
     async function load(scenarioId) {
       teardownWalkMode();
+      restoreStoryLegend();   // cas 5 la remplacera par la légende des circuits
       if (scenarioId === '3') {
         loadWalkCase();
         return;
@@ -182,13 +220,14 @@
       // Cas 5 : géométrie STM réelle + carte OSM + cônes d'incertitude
       // reconstruits à la volée depuis les horaires compacts par circuit
       // (fichiers circuits/*.json + circuits_index.json, schéma scalable).
-      let model, bounds;
+      let model, bounds, indexCircuits;
       try {
         const [data, b] = await Promise.all([
           loadCircuits('./data'),
           fetch('./data/map_bounds.json').then(r => r.json()),
         ]);
         bounds = b;
+        indexCircuits = data.index.circuits;
         model = createScheduleModel(data);
       } catch (err) {
         alert(
@@ -199,6 +238,7 @@
         return;
       }
       routes = model.routes;
+      setCircuitLegend(indexCircuits);
       init(canvas, {
         routes,
         transferWindows: [],

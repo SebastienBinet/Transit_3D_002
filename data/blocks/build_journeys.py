@@ -32,11 +32,16 @@ INDEX_IN     = Path(__file__).parent.parent.parent / "web" / "data" / "circuits_
 OUTPUT_DIR   = Path(__file__).parent.parent.parent / "web" / "data"
 
 # ── Paramètres du modèle de trajet ─────────────────────────────────────────
-WALK_RADIUS_M   = 300.0     # rayon de marche max (embarquement, transfert, descente)
-WALK_SPEED_MPS  = 1.4       # vitesse de marche
-TRANSFER_BUFFER_S = 0.0     # tampon en plus du temps de marche
-TRAJET_COUNT    = 10        # nombre de trajets retenus
-LAT_M           = 111_000.0
+WALK_RADIUS_M     = 300.0    # rayon de marche max (embarquement, transfert, descente)
+WALK_SPEED_MPS    = 1.4      # vitesse de marche
+TRANSFER_BUFFER_S = 0.0      # tampon en plus du temps de marche
+TRAJET_COUNT      = 10       # nombre de trajets retenus dans la sortie finale
+# La terminaison anticipée stoppe dès que SEARCH_DEPTH complétions brutes ont été
+# collectées ET que le heap dépasse la pire. On choisit un multiple de TRAJET_COUNT
+# pour laisser assez de place après le filtre de dominance.
+SEARCH_DEPTH      = 60       # complétions brutes avant d'autoriser la coupure
+MAX_JOURNEY_S     = 7200.0   # horizon absolu : ne jamais dépasser depart + 2 h
+LAT_M             = 111_000.0
 
 # ── Registre des cas (extensible : cas 6, 7, ...) ──────────────────────────
 # origin_lines / dest_lines : numéros (sans suffixe N/S) dont l'intersection
@@ -172,21 +177,43 @@ def search(case, stops, trips, nearby, board_idx):
 
     # État : (time, stop_global, frozenset(bases utilisées), legs)
     # legs : liste de segments bus (le détail marche est recalculé à la sortie).
-    best_at = {}        # (stop, frozenset) -> meilleur temps de settle
-    completed = {}      # (stop_final, frozenset) -> meilleure arrivée + legs
+    #
+    # Clé de pruning : (stop, used, last_trip_id). Deux chemins qui arrivent au même
+    # arrêt via des passages de bus DIFFÉRENTS sont des états distincts et doivent
+    # tous deux être développés — sinon le Dijkstra coupe les passages ultérieurs
+    # d'une même ligne qui pourraient connecter à un bus différent en aval.
+    best_at = {}        # (stop, frozenset, last_trip_id|None) -> meilleur temps de settle
+    # Clé de complétion = tuple des trip_id réellement empruntés : plusieurs arrêts
+    # de descente du même bus en zone d'arrivée ne comptent qu'UN trajet (le meilleur).
+    completed = {}      # tuple(trip_ids) -> meilleure arrivée + legs
 
     heap = []
     counter = 0
     for stop_i, walk_s, dist in access:
         t = depart_s + walk_s
-        state = (t, stop_i, frozenset(), tuple())
         heapq.heappush(heap, (t, counter, stop_i, frozenset(), tuple(),
                               {"access_stop": stop_i, "access_walk_s": walk_s, "access_dist": dist}))
         counter += 1
 
+    deadline = depart_s + MAX_JOURNEY_S
+
     while heap:
         t, _, stop_i, used, legs, meta = heapq.heappop(heap)
-        key = (stop_i, used)
+
+        # Terminaison anticipée : si on a collecté SEARCH_DEPTH complétions brutes
+        # et que le heap dépasse la pire, les futures complétions sont toutes pires.
+        # On utilise SEARCH_DEPTH >> TRAJET_COUNT pour laisser de la marge au filtre
+        # de dominance (certaines complétions brutes seront éliminées).
+        if len(completed) >= SEARCH_DEPTH:
+            worst = sorted(completed.values(), key=lambda c: c["arrival_s"])[SEARCH_DEPTH - 1]["arrival_s"]
+            if t > worst:
+                break
+
+        if t > deadline:
+            break
+
+        last_tid = legs[-1]["trip_id"] if legs else None
+        key = (stop_i, used, last_tid)
         if key in best_at and best_at[key] <= t:
             continue
         best_at[key] = t
@@ -195,7 +222,9 @@ def search(case, stops, trips, nearby, board_idx):
         if stop_i in egress and legs:
             walk_s, dist = egress[stop_i]
             arrival = t + walk_s
-            ckey = (stop_i, used)
+            # Clé = séquence exacte des passages de bus pris : plusieurs arrêts du
+            # même bus dans le rayon d'arrivée ne créent qu'une seule entrée.
+            ckey = tuple(leg["trip_id"] for leg in legs)
             if ckey not in completed or arrival < completed[ckey]["arrival_s"]:
                 completed[ckey] = {
                     "arrival_s": arrival, "legs": legs, "meta": meta,
@@ -225,7 +254,7 @@ def search(case, stops, trips, nearby, board_idx):
                         "from_walk_stop": stop_i, "from_walk_s": walk_s,
                         "n_stops": j - pos,
                     },)
-                    nstate_key = (a_stop, nused)
+                    nstate_key = (a_stop, nused, trip["trip_id"])
                     if nstate_key in best_at and best_at[nstate_key] <= a_time:
                         continue
                     heapq.heappush(heap, (a_time, counter, a_stop, nused, nlegs, meta))

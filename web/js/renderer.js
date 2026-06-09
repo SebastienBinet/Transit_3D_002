@@ -54,6 +54,39 @@ let _prevDrawNow = 0;
 let currentSimTime = 0;
 export function updateSimTime(t) { currentSimTime = t; }
 
+// ── Sprites de passagers (Cas 6 et futurs cas de trajets) ─────────────────
+// Mis à jour à chaque tick RAF via _getPassengerPositions(tAbs), indépendamment
+// du pas de frame (position fluide même entre deux frames de simulation).
+const passengerSprites = [];  // Three.Sprite[], dans scene (Y=0)
+let _getPassengerPositions = null;  // (tAbs) => [{lat,lon,color,phase}] | null
+let _t0ForPassengers = 0;           // secondes depuis minuit pour tAbs = t0 + simTime
+
+// Initialise les sprites de passagers. Appelé après init() depuis index.html.
+export function initPassengers(count, colors) {
+    for (const s of passengerSprites) { scene.remove(s); s.material.map?.dispose(); s.material.dispose(); }
+    passengerSprites.length = 0;
+    for (let i = 0; i < count; i++) {
+        const s = makePersonSprite(colors[i] ?? 0xffffff);
+        s.scale.set(180, 270, 1);   // légèrement plus petit que les cas 1/2
+        s.visible = false;
+        scene.add(s);
+        passengerSprites.push(s);
+    }
+}
+
+// Enregistre la fonction de position continue. null = désactiver.
+export function setPassengerSource(fn) { _getPassengerPositions = fn; }
+
+// Fixe t0 (sec depuis minuit) : tAbs = t0 + currentSimTime envoyé à la source.
+export function setPassengerT0(t0) { _t0ForPassengers = t0; }
+
+function clearPassengers() {
+    for (const s of passengerSprites) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
+    passengerSprites.length = 0;
+    _getPassengerPositions = null;
+    _t0ForPassengers = 0;
+}
+
 // Affichage du ruban d'incertitude p10–p90. Décoché par défaut (lecture allégée).
 let showUncertainty = false;
 export function setShowUncertainty(v) { showUncertainty = !!v; refreshTimeGridVisible(); }
@@ -258,6 +291,7 @@ export function init(canvas, config) {
 
     timeGridGroup = null;
     timeGridLabels.length = 0;
+    clearPassengers();
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));
@@ -467,6 +501,21 @@ export function init(canvas, config) {
             }
         }
 
+        // Sprites de passagers — mis à jour à chaque tick RAF pour un mouvement fluide
+        if (_getPassengerPositions && passengerSprites.length) {
+            const tAbs = currentSimTime + (_t0ForPassengers ?? 0);
+            const positions = _getPassengerPositions(tAbs);
+            for (let i = 0; i < passengerSprites.length; i++) {
+                const pos = positions[i];
+                if (pos && pos.lat != null) {
+                    passengerSprites[i].visible = true;
+                    passengerSprites[i].position.copy(geoPos(pos.lat, pos.lon));
+                } else {
+                    passengerSprites[i].visible = false;
+                }
+            }
+        }
+
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N
         const realTime = now / 1000;
         for (const { handle, urgencyFn } of animatedFlags) {
@@ -554,7 +603,24 @@ function drawFrame(frame, routes) {
     // Hors récit (ex. scenario STM réel), tous les véhicules reçoivent un style uniforme.
     const isStoryMode = frame.vehicles.some(v => v.vehicle_id === 'L42-util');
 
+    // Mode "trajets" (Cas 6 et similaires) : frame.passengers liste les voyageurs.
+    // Les trip_ids actifs (passager dedans) sont en pleine opacité ; les planifiés
+    // (pas encore pris) à 60 % ; les autres à 25 %.
+    const journeyPassengers = frame.passengers ?? [];
+    const isJourneyMode = journeyPassengers.length > 0;
+    const activeTripIds = isJourneyMode
+        ? new Set(journeyPassengers.filter(p => p.phase === 'bus').map(p => p.trip_id).filter(Boolean))
+        : null;
+    const plannedTripIds = isJourneyMode
+        ? new Set(journeyPassengers.flatMap(p => p.planned_trips ?? []))
+        : null;
+
     function vehicleStyle(vid) {
+        if (isJourneyMode) {
+            if (activeTripIds.has(vid))  return { lineOp: 1.0,  bandOp: 0.35, bold: true };
+            if (plannedTripIds.has(vid)) return { lineOp: 0.60, bandOp: 0.20, bold: false };
+            return { lineOp: 0.25, bandOp: 0.08, bold: false };
+        }
         if (!isStoryMode) return { lineOp: 0.85, bandOp: 0.20, bold: false };
         if (vid === 'L42-util')          return { lineOp: 1.0, bandOp: 0.35, bold: true };
         if (vid === suggestedConnector)   return { lineOp: 1.0, bandOp: 0.30, bold: true };

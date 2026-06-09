@@ -283,55 +283,98 @@ def hms(s):
     return f"{s // 3600}h{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def format_journey(rank, jr, stops, depart_s):
+def format_journey(rank, jr, stops, depart_s, origin_pt, dest_pt):
+    """Construit la représentation détaillée d'un trajet avec toutes les infos
+    géographiques (lat/lon) et temporelles (depart_s/arrive_s) nécessaires au
+    visualizer pour animer le passager (phases walk / wait / bus)."""
     legs_out = []
-    # Marche d'accès (origine → premier embarquement)
+    t = float(depart_s)  # curseur temporel
+
+    def spt(idx):
+        """Raccourci : infos d'un arrêt global par son index."""
+        s = stops[idx]
+        return s["stop_id"], s["name"], s["lat"], s["lon"]
+
+    # ── Marche d'accès (ORIGIN → premier embarquement) ────────────────────
     first = jr["legs"][0]
-    meta = jr["meta"]
+    meta  = jr["meta"]
+    _, to_name, to_lat, to_lon = spt(first["board_stop"])
+    walk0_arrive = t + meta["access_walk_s"]
     legs_out.append({
         "type": "walk", "from": "ORIGIN",
-        "to_stop": stops[first["board_stop"]]["stop_id"],
-        "to_name": stops[first["board_stop"]]["name"],
+        "to_stop": stops[first["board_stop"]]["stop_id"], "to_name": to_name,
+        "from_lat": origin_pt["lat"], "from_lon": origin_pt["lon"],
+        "to_lat": to_lat, "to_lon": to_lon,
         "dist_m": round(meta["access_dist"], 1),
         "walk_s": round(meta["access_walk_s"], 1),
-        "depart_s": depart_s, "arrive_s": round(depart_s + meta["access_walk_s"], 1),
+        "depart_s": round(t, 1), "arrive_s": round(walk0_arrive, 1),
     })
+    t = walk0_arrive
+
     for k, leg in enumerate(jr["legs"]):
-        # Marche de transfert entre bus k-1 et bus k (si l'embarquement ≠ descente précédente)
+        board_sid, board_name, board_lat, board_lon = spt(leg["board_stop"])
+        alight_sid, alight_name, alight_lat, alight_lon = spt(leg["alight_stop"])
+
+        # ── Marche de transfert entre bus k-1 et bus k ────────────────────
         if k > 0:
             prev = jr["legs"][k - 1]
-            if leg["from_walk_s"] > 0 or leg["board_stop"] != prev["alight_stop"]:
-                legs_out.append({
-                    "type": "walk",
-                    "from_stop": stops[prev["alight_stop"]]["stop_id"],
-                    "from_name": stops[prev["alight_stop"]]["name"],
-                    "to_stop": stops[leg["board_stop"]]["stop_id"],
-                    "to_name": stops[leg["board_stop"]]["name"],
-                    "dist_m": round(leg["from_walk_s"] * WALK_SPEED_MPS, 1),
-                    "walk_s": round(leg["from_walk_s"], 1),
-                })
+            walk_arrive = t + leg["from_walk_s"]
+            _, prev_name, prev_lat, prev_lon = spt(prev["alight_stop"])
+            legs_out.append({
+                "type": "walk",
+                "from_stop": stops[prev["alight_stop"]]["stop_id"],
+                "from_name": prev_name,
+                "to_stop": board_sid, "to_name": board_name,
+                "from_lat": prev_lat, "from_lon": prev_lon,
+                "to_lat": board_lat, "to_lon": board_lon,
+                "dist_m": round(leg["from_walk_s"] * WALK_SPEED_MPS, 1),
+                "walk_s": round(leg["from_walk_s"], 1),
+                "depart_s": round(t, 1), "arrive_s": round(walk_arrive, 1),
+            })
+            t = walk_arrive
+
+        # ── Attente à l'arrêt si le bus arrive plus tard que la marche ────
+        if leg["board_s"] > t + 1:
+            legs_out.append({
+                "type": "wait",
+                "at_stop": board_sid, "at_name": board_name,
+                "from_lat": board_lat, "from_lon": board_lon,
+                "to_lat": board_lat, "to_lon": board_lon,
+                "wait_s": round(leg["board_s"] - t, 1),
+                "depart_s": round(t, 1), "arrive_s": round(leg["board_s"], 1),
+            })
+        t = leg["board_s"]
+
+        # ── Segment de bus ────────────────────────────────────────────────
         legs_out.append({
             "type": "bus", "line_id": leg["line_id"], "base": leg["base"],
             "trip_id": leg["trip_id"],
-            "board_stop": stops[leg["board_stop"]]["stop_id"],
-            "board_name": stops[leg["board_stop"]]["name"],
+            "board_stop": board_sid, "board_name": board_name,
+            "board_lat": board_lat, "board_lon": board_lon,
             "board_s": leg["board_s"], "board_hms": hms(leg["board_s"]),
-            "alight_stop": stops[leg["alight_stop"]]["stop_id"],
-            "alight_name": stops[leg["alight_stop"]]["name"],
+            "alight_stop": alight_sid, "alight_name": alight_name,
+            "alight_lat": alight_lat, "alight_lon": alight_lon,
             "alight_s": leg["alight_s"], "alight_hms": hms(leg["alight_s"]),
             "n_stops": leg["n_stops"],
+            "depart_s": round(leg["board_s"], 1),
+            "arrive_s": round(leg["alight_s"], 1),
         })
-    # Marche de sortie (dernière descente → destination)
+        t = leg["alight_s"]
+
+    # ── Marche de sortie (dernière descente → DESTINATION) ────────────────
     last = jr["legs"][-1]
+    _, from_name, from_lat, from_lon = spt(last["alight_stop"])
     legs_out.append({
         "type": "walk",
-        "from_stop": stops[last["alight_stop"]]["stop_id"],
-        "from_name": stops[last["alight_stop"]]["name"],
+        "from_stop": stops[last["alight_stop"]]["stop_id"], "from_name": from_name,
         "to": "DESTINATION",
+        "from_lat": from_lat, "from_lon": from_lon,
+        "to_lat": dest_pt["lat"], "to_lon": dest_pt["lon"],
         "dist_m": round(jr["egress_dist"], 1),
         "walk_s": round(jr["egress_walk_s"], 1),
-        "arrive_s": round(jr["arrival_s"], 1),
+        "depart_s": round(t, 1), "arrive_s": round(jr["arrival_s"], 1),
     })
+
     return {
         "rank": rank,
         "arrival_s": round(jr["arrival_s"], 1),
@@ -360,7 +403,7 @@ def build_case(case, stops, trips, nearby, board_idx):
             "percentile": "p50",
             "rule": "un numéro de ligne au plus une fois par trajet (N/S confondus)",
         },
-        "journeys": [format_journey(i + 1, jr, stops, depart_s)
+        "journeys": [format_journey(i + 1, jr, stops, depart_s, origin, dest)
                      for i, jr in enumerate(journeys)],
     }
 

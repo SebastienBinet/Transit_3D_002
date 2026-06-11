@@ -97,6 +97,55 @@ test('buildCone : borné par length_m', () => {
     for (const pt of traj) assert.ok(pt.p90 <= 500);
 });
 
+// ── buildCone avec tFirst : incertitude ancrée au départ du terminus ──────
+// Horaire long : départ tFirst=1000, vitesse 1 m/s pendant 1000 s.
+const farSchedule = [
+    { t_arr: 1000, t_dep: 1000, progress_m: 0 },
+    { t_arr: 2000, t_dep: 2000, progress_m: 1000 },
+];
+
+test('buildCone+tFirst : bus pas parti → cône plus étroit que le modèle ancré à now', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    // now=100, départ à t=1000 : l'ancien modèle accumule σ(900+) au départ
+    const oldTraj = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn);
+    const newTraj = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn, tFirst);
+    // Comparer la largeur du cône à t = 1060 (60 s après le départ planifié)
+    const oldPt = oldTraj.find(p => p.t === 960);
+    const newPt = newTraj.find(p => p.t === 960);
+    assert.ok(newPt.p90 - newPt.p10 < oldPt.p90 - oldPt.p10,
+        `nouveau ${newPt.p90 - newPt.p10} ≥ ancien ${oldPt.p90 - oldPt.p10}`);
+});
+
+test('buildCone+tFirst : aucune avance possible au départ du terminus (p90 = p50)', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    const traj = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn, tFirst);
+    // Au point juste après le départ planifié (t=960 abs=1060) : σ_early=σ(60)
+    // borne p90 ; au départ même (t=900 abs=1000), p90 = p50 = 0.
+    const atDep = traj.find(p => p.t === 900);
+    assert.equal(atDep.p90, atDep.p50, 'p90 devrait égaler p50 au départ');
+});
+
+test('buildCone+tFirst : invariants conservés (p10 ≤ p50 ≤ p90, monotonie)', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    const traj = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn, tFirst);
+    for (let i = 0; i < traj.length; i++) {
+        const pt = traj[i];
+        assert.ok(pt.p10 <= pt.p50 && pt.p50 <= pt.p90);
+        if (i > 0) {
+            assert.ok(pt.p10 >= traj[i - 1].p10);
+            assert.ok(pt.p50 >= traj[i - 1].p50);
+            assert.ok(pt.p90 >= traj[i - 1].p90);
+        }
+    }
+});
+
+test('buildCone sans tFirst : comportement historique inchangé', () => {
+    const { fn } = makeSched(schedule);
+    const a = buildCone(fn, 500, 100, 0, 120, 60, sigmaFn);
+    const b = buildCone(fn, 500, 100, 0, 120, 60, sigmaFn, -Infinity);
+    assert.deepEqual(a, b);
+});
+
 // ── createScheduleModel : interface player ────────────────────────────────
 function makeIndexAndCircuits(t0) {
     const index = {

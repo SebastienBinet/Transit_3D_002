@@ -8,20 +8,8 @@ import { create as createForkMode }   from './viz-mode-fork.js';
 import { create as createWalkMode }   from './viz-mode-walk.js';
 import { createAnimatedFlag } from './flag-animation.js';
 import { logEvent } from './diagnostics.js';
+import { LINE_COLORS } from './colors.js';
 
-const LINE_COLORS = {
-    L42: 0x4488ff, L17: 0xff8844, L33: 0x44cc44,
-    // Lignes STM réelles — deux directions (N/S) par ligne
-    "51N": 0x4488ff, "51S": 0x2255cc,
-    "165N": 0xff8844, "165S": 0xcc5511,
-    "11N": 0x44cc44, "11S": 0x229922,
-    "129N": 0xffcc00, "129S": 0xcc9900,
-    "155N": 0x44ccdd, "155S": 0x2299aa,
-    "66N": 0xff4466, "66S": 0xcc1133,
-    "144N": 0x88ff44, "144S": 0x55cc11,
-    "124N": 0xff9900, "124S": 0xcc6600,
-    "480N": 0x9900cc, "480S": 0x6600aa,
-};
 const SUGGEST_THRESHOLD = 0.50;
 const TIME_SCALE = 2.5;
 const LAT_M = 111_000;

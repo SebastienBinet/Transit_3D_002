@@ -8,12 +8,7 @@
 
 import { makeSched, makeSigma, buildCone } from './scenario-model.js';
 import { progressToLatLon }               from './interpolation.js';
-
-// Couleurs distinctes (une par trajet, max 8)
-const JOURNEY_COLORS = [
-    0xff5533, 0x33dd77, 0x4488ff, 0xffdd22,
-    0xff44cc, 0x33dddd, 0xff9922, 0xaaff33,
-];
+import { JOURNEY_COLORS }                 from './colors.js';
 
 export function createJourneyModel({ journeysData, circuits }) {
     const t0      = journeysData.depart_after_s;
@@ -105,7 +100,7 @@ export function createJourneyModel({ journeysData, circuits }) {
         const vehicleFrames = [];
         for (const v of vehicles) {
             if (v.tLast < nowAbs || v.tFirst > winHi) continue;
-            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizonS, STEP, sigmaFn);
+            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizonS, STEP, sigmaFn, v.tFirst);
             vehicleFrames.push({ vehicle_id: v.vehicle_id, line_id: v.line_id, trajectory: traj });
         }
         const passengers = journeysData.journeys.map((jr, i) => ({
@@ -140,10 +135,16 @@ export function createJourneyModel({ journeysData, circuits }) {
     }
     refresh(true);
 
+    // Heure de départ du terminus par trip — sert à ancrer l'incertitude
+    // (un bus pas encore parti ne peut pas être en avance).
+    const tripStarts = {};
+    for (const [tid, td] of tripData) tripStarts[tid] = td.tFirst;
+
     return {
         routes,
         t0Seconds: t0,
         horizonS,
+        tripStarts,
         get frame()     { return cached; },
         get simTime()   { return now; },
         get isPlaying() { return playing; },

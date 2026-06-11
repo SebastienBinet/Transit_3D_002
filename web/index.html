@@ -166,10 +166,11 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0 } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
+    import { createJourneyPanel } from './js/journey-panel.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
 
     const JOURNEY_COLORS = [
@@ -182,6 +183,7 @@
     let routes = null;
     let lastTs = null;
     let walkMode = null;
+    let journeyPanel = null;
 
     // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
     const storyLegendHTML = document.getElementById('legend').innerHTML;
@@ -239,6 +241,11 @@
       if (walkMode) { walkMode.dispose(); walkMode = null; }
     }
 
+    function teardownJourneyPanel() {
+      if (journeyPanel) { journeyPanel.dispose(); journeyPanel = null; }
+      setJourneyHighlight(null);
+    }
+
     async function loadJourneyCase6() {
       let journeysData, bounds, circuitsData;
       try {
@@ -255,7 +262,6 @@
       const model = createJourneyModel({ journeysData, circuits: circuitsData.circuits });
       routes = model.routes;
 
-      setJourneyLegend(journeysData);
       init(canvas, {
         routes,
         transferWindows: [],
@@ -268,6 +274,13 @@
       setPassengerT0(model.t0Seconds);
       setPassengerSource(tAbs => model.getPassengerPositions(tAbs));
 
+      // Vignette timeline : remplace entièrement le contenu de #legend
+      journeyPanel = createJourneyPanel({
+        container: document.getElementById('legend'),
+        journeysData,
+        onJourneySelect: tripIds => setJourneyHighlight(tripIds),
+      });
+
       player = model;
       player.setSpeed(Number(document.getElementById('speed-select').value));
       update();
@@ -275,6 +288,7 @@
 
     async function load(scenarioId) {
       teardownWalkMode();
+      teardownJourneyPanel();
       restoreStoryLegend();   // cas 5/6 la remplaceront par leur propre légende
       if (scenarioId === '3') {
         loadWalkCase();
@@ -488,11 +502,14 @@
         }
         updateHud();
       }
-      if (player) updateSimTime(player.simTime);
+      if (player) {
+        updateSimTime(player.simTime);
+        journeyPanel?.update(player.simTime);
+      }
       if (lastTs !== null) updateDebug(rawDeltaMs);
-      // Rose des vents : rotation inverse de l'azimut caméra → N pointe vers le Nord géographique
+      // Rose des vents : theta positif = caméra vers l'Est → N pointe à droite = +deg CSS
       document.getElementById('compass').style.transform =
-        `rotate(${(-getAzimuthalAngle() * 180 / Math.PI).toFixed(1)}deg)`;
+        `rotate(${(getAzimuthalAngle() * 180 / Math.PI).toFixed(1)}deg)`;
       lastTs = ts;
     }
 

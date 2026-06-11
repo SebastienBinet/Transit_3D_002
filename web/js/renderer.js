@@ -80,11 +80,19 @@ export function setPassengerSource(fn) { _getPassengerPositions = fn; }
 // Fixe t0 (sec depuis minuit) : tAbs = t0 + currentSimTime envoyé à la source.
 export function setPassengerT0(t0) { _t0ForPassengers = t0; }
 
+// Surlignage sélectif d'un sous-ensemble de trips (Cas 6 : clic sur trajet dans la vignette).
+// null = pas de filtre (tous égaux). Set<trip_id> = seuls ces trips sont pleine opacité.
+let _highlightedJourneyTripIds = null;
+export function setJourneyHighlight(tripIds) {
+    _highlightedJourneyTripIds = tripIds ? new Set(tripIds) : null;
+}
+
 function clearPassengers() {
     for (const s of passengerSprites) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
     passengerSprites.length = 0;
     _getPassengerPositions = null;
     _t0ForPassengers = 0;
+    _highlightedJourneyTripIds = null;
 }
 
 // Affichage du ruban d'incertitude p10–p90. Décoché par défaut (lecture allégée).
@@ -503,15 +511,43 @@ export function init(canvas, config) {
 
         // Sprites de passagers — mis à jour à chaque tick RAF pour un mouvement fluide
         if (_getPassengerPositions && passengerSprites.length) {
-            const tAbs = currentSimTime + (_t0ForPassengers ?? 0);
+            const tAbs = _t0ForPassengers + currentSimTime;
             const positions = _getPassengerPositions(tAbs);
+            const wallT = now / 1000;
+
+            // Regrouper par position (précision ~11 m) pour détecter les superpositions
+            const groups = new Map();
             for (let i = 0; i < passengerSprites.length; i++) {
                 const pos = positions[i];
-                if (pos && pos.lat != null) {
-                    passengerSprites[i].visible = true;
-                    passengerSprites[i].position.copy(geoPos(pos.lat, pos.lon));
-                } else {
-                    passengerSprites[i].visible = false;
+                if (!pos || pos.lat == null) { passengerSprites[i].visible = false; continue; }
+                const key = pos.lat.toFixed(4) + ',' + pos.lon.toFixed(4);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push({ i, pos });
+            }
+
+            // Y cible : décaler le sprite pour mettre les pieds au sol (Y=0)
+            // Sprite: scale 180×270, canvas 64×96, pieds à px 90 → offset = 270/2 − (6/96)*270 ≈ 118
+            const FEET_Y = 118;
+            const CIRCLE_R = 2;        // mètres
+            const PERIOD_S = 2.0;      // secondes par tour complet
+
+            for (const members of groups.values()) {
+                const N = members.length;
+                for (let k = 0; k < N; k++) {
+                    const { i, pos } = members[k];
+                    const base = geoPos(pos.lat, pos.lon);
+                    const sprite = passengerSprites[i];
+                    sprite.visible = true;
+                    if (N >= 2) {
+                        const angle = (2 * Math.PI * k / N) + (2 * Math.PI * wallT / PERIOD_S);
+                        sprite.position.set(
+                            base.x + CIRCLE_R * Math.sin(angle),
+                            FEET_Y,
+                            base.z + CIRCLE_R * Math.cos(angle),
+                        );
+                    } else {
+                        sprite.position.set(base.x, FEET_Y, base.z);
+                    }
                 }
             }
         }
@@ -617,6 +653,8 @@ function drawFrame(frame, routes) {
 
     function vehicleStyle(vid) {
         if (isJourneyMode) {
+            const inHighlight = _highlightedJourneyTripIds === null || _highlightedJourneyTripIds.has(vid);
+            if (!inHighlight) return { lineOp: 0.10, bandOp: 0.03, bold: false };
             if (activeTripIds.has(vid))  return { lineOp: 1.0,  bandOp: 0.35, bold: true };
             if (plannedTripIds.has(vid)) return { lineOp: 0.60, bandOp: 0.20, bold: false };
             return { lineOp: 0.25, bandOp: 0.08, bold: false };

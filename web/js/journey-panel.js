@@ -33,7 +33,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     const tMin    = t0 - 60;
     const tMax    = Math.max(...journeysData.journeys.map(j => j.arrival_s)) + 360;
 
-    let mode        = 'legend';   // 'legend' | 'whisker' | 'biseau'
+    let mode        = 'biseau';   // 'legend' | 'biseau'
     let pinned      = false;
     let collapsed   = false;
     let selectedIdx = null;      // null = tous, number = trajet sélectionné
@@ -74,7 +74,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
         const modeEl = document.createElement('select');
         modeEl.style.cssText = 'background:#1a2a3a; color:#cdd; border:1px solid #446; padding:2px 4px; border-radius:4px; font-size:10px; font-family:monospace;';
-        [['legend', 'Légende'], ['whisker', 'Moustaches'], ['biseau', 'Biseaux']].forEach(([v, l]) => {
+        [['legend', 'Légende'], ['biseau', 'Biseaux']].forEach(([v, l]) => {
             const o = document.createElement('option');
             o.value = v; o.textContent = l; modeEl.appendChild(o);
         });
@@ -120,7 +120,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         contentDiv.innerHTML = '';
         cvs = null; ctx = null;
         if (mode === 'legend') { renderLegend(); return; }
-        renderTimelineCanvas();
+        renderTimelineCanvas();   // mode biseau
     }
 
     // ── Légende simple ────────────────────────────────────────────────────────
@@ -291,16 +291,6 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             ctx.arc(dx, yMid, 1.8, 0, Math.PI * 2);
             ctx.fill();
         }
-        // Moustache à la fin de la marche (option A) — hérite du σ de la descente
-        // du bus précédent. Mode moustaches seulement (le biseau le montre déjà).
-        if (mode === 'whisker' && li > 0) {
-            const prevBus = findPreceding(legs, li, 'bus');
-            if (prevBus) {
-                const sg = eventSigmas(prevBus.arrive_s, prevBus.trip_id, nowAbs);
-                const busCol = hex(LINE_COLORS[prevBus.line_id] ?? 0x888888);
-                drawWhisker(x2, y0, sg, busCol, 'alight');
-            }
-        }
     }
 
     function drawWait(leg, yMid, jCol) {
@@ -326,24 +316,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         // Couleur du CIRCUIT — identique au tracé sur la carte et aux cônes 3D
         const col = hex(LINE_COLORS[leg.line_id] ?? 0x888888);
 
-        if (mode === 'biseau') {
-            drawBiseau(leg, yMid, col, nowAbs, boardS, alightS, x1, x2);
-        } else {
-            // Pilule rectangulaire arrondie
-            ctx.fillStyle = col;
-            roundRect(ctx, x1, pillY, x2 - x1, PILL_H, 5);
-            ctx.fill();
-            if (x2 - x1 > 18) {
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 8px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText(leg.base, (x1 + x2) / 2, yMid + 3);
-            }
-            if (mode === 'whisker') {
-                drawWhisker(x1, y0, eventSigmas(boardS,  leg.trip_id, nowAbs), col, 'board');
-                drawWhisker(x2, y0, eventSigmas(alightS, leg.trip_id, nowAbs), col, 'alight');
-            }
-        }
+        drawBiseau(leg, yMid, col, nowAbs, boardS, alightS, x1, x2);
     }
 
     // ── Biseau ────────────────────────────────────────────────────────────────
@@ -381,44 +354,6 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             ctx.textAlign = 'center';
             ctx.fillText(leg.base, midX, yMid + 3);
         }
-    }
-
-    // ── Moustache : intervalle p10–p90 d'un événement bus ────────────────────
-    // Deux triangles partageant la base verticale à p50 : pointe gauche = p10
-    // (plus tôt), pointe droite = p90 (plus tard). Au terminus, early=0 → seul
-    // le petit triangle « retard » apparaît.
-    // type 'alight' → partie haute de la rangée ; 'board' → partie basse.
-    function drawWhisker(xBase, y0, sigmas, col, type) {
-        const earlyPx = sToPx(sigmas.early);
-        const latePx  = sToPx(sigmas.late);
-        if (earlyPx < 1 && latePx < 1) return;
-
-        ctx.save();
-        ctx.fillStyle = col;
-        ctx.globalAlpha *= 0.75;
-
-        const halfH = ROW_H * 0.38;
-        const yTop = type === 'alight' ? y0 + 1 : y0 + ROW_H - halfH;
-        const yBot = type === 'alight' ? y0 + halfH : y0 + ROW_H - 1;
-        const yMidT = (yTop + yBot) / 2;
-
-        if (earlyPx >= 1) {       // triangle vers p10 (gauche = plus tôt)
-            ctx.beginPath();
-            ctx.moveTo(xBase, yTop);
-            ctx.lineTo(xBase, yBot);
-            ctx.lineTo(xBase - earlyPx, yMidT);
-            ctx.closePath();
-            ctx.fill();
-        }
-        if (latePx >= 1) {        // triangle vers p90 (droite = plus tard)
-            ctx.beginPath();
-            ctx.moveTo(xBase, yTop);
-            ctx.lineTo(xBase, yBot);
-            ctx.lineTo(xBase + latePx, yMidT);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.restore();
     }
 
     // ── Utilitaires ───────────────────────────────────────────────────────────

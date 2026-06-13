@@ -171,12 +171,8 @@
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
     import { createJourneyPanel } from './js/journey-panel.js';
+    import { JOURNEY_COLORS } from './js/colors.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
-
-    const JOURNEY_COLORS = [
-      0xff5533, 0x33dd77, 0x4488ff, 0xffdd22,
-      0xff44cc, 0x33dddd, 0xff9922, 0xaaff33,
-    ];
 
     const canvas = document.getElementById('canvas');
     let player = null;
@@ -217,23 +213,6 @@
       document.getElementById('legend').innerHTML =
         `<div style="margin-bottom:6px; color:#aac; font-weight:bold">Circuits STM</div>`
         + `<div class="legend-cols">${rows}</div>`
-        + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
-    }
-
-    // Légende pour Cas 6 : une ligne par trajet avec couleur + heure d'arrivée
-    function setJourneyLegend(journeysData) {
-      const rows = journeysData.journeys.map((jr, i) => {
-        const color = '#' + (JOURNEY_COLORS[i % JOURNEY_COLORS.length]).toString(16).padStart(6, '0');
-        const arrH = Math.floor(jr.arrival_s / 3600);
-        const arrM = Math.floor((jr.arrival_s % 3600) / 60);
-        const arrTime = `${arrH}h${String(arrM).padStart(2,'0')}`;
-        const lineNames = jr.legs.filter(l => l.type === 'bus').map(l => l.base).join(' → ');
-        return `<div><span class="dot" style="background:${color}"></span>`
-             + `Trajet ${jr.rank} · ${lineNames} · arr. ${arrTime}</div>`;
-      }).join('');
-      document.getElementById('legend').innerHTML =
-        `<div style="margin-bottom:6px; color:#aac; font-weight:bold">Trajets 51∩66 → 480∩144</div>`
-        + rows
         + `<div style="margin-top:8px; color:#888; font-size:11px">Axe vertical = temps</div>`;
     }
 
@@ -278,6 +257,7 @@
       journeyPanel = createJourneyPanel({
         container: document.getElementById('legend'),
         journeysData,
+        tripStarts: model.tripStarts,
         onJourneySelect: tripIds => setJourneyHighlight(tripIds),
       });
 

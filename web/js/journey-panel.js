@@ -1,16 +1,19 @@
 // Vignette timeline pour le Cas 6 : une rangée par trajet sur un axe de temps commun.
 // Trois modes : légende simple, timeline avec moustaches (option A), timeline avec biseaux.
 // Three.js-free — testable sous Node (utilise uniquement DOM + Canvas 2D).
+//
+// Couleurs : pilule de bus = couleur du circuit (même que la carte / cônes 3D) ;
+// marche, attente et bonhomme de gauche = couleur du trajet (même que le sprite 3D).
+//
+// Incertitude (même modèle que buildCone) : ancrée à max(now, départ terminus).
+// Un bus pas encore parti ne peut pas être en avance : côté p10 nul au terminus,
+// petit σ côté retard (SIGMA_DEP_LATE_S).
 
-import { makeSigma } from './scenario-model.js';
-
-const JOURNEY_COLORS = [
-    0xff5533, 0x33dd77, 0x4488ff, 0xffdd22,
-    0xff44cc, 0x33dddd, 0xff9922, 0xaaff33,
-];
+import { makeSigma, SIGMA_DEP_LATE_S } from './scenario-model.js';
+import { LINE_COLORS, JOURNEY_COLORS } from './colors.js';
 
 const PANEL_W   = 420;
-const LEFT_GUT  = 58;   // gouttière gauche : heure de départ
+const LEFT_GUT  = 74;   // gouttière gauche : bonhomme + heure de départ
 const RIGHT_GUT = 88;   // gouttière droite : heure d'arrivée + durée
 const DRAW_W    = PANEL_W - LEFT_GUT - RIGHT_GUT;
 const ROW_H     = 27;
@@ -24,7 +27,7 @@ function fmtT(s) {
     return `${h}h${String(m).padStart(2, '0')}`;
 }
 
-export function createJourneyPanel({ container, journeysData, onJourneySelect }) {
+export function createJourneyPanel({ container, journeysData, tripStarts = {}, onJourneySelect }) {
     const sigmaFn = makeSigma({ kind: 'power', coeff_min: 3.0, exp: 0.301 });
     const t0      = journeysData.depart_after_s;
     const tMin    = t0 - 60;
@@ -42,6 +45,19 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
 
     // ── Coordonnée X sur le canvas ───────────────────────────────────────────
     function tX(t) { return LEFT_GUT + (t - tMin) / (tMax - tMin) * DRAW_W; }
+    function sToPx(s) { return s / (tMax - tMin) * DRAW_W; }
+
+    // ── σ asymétrique d'un événement bus (board/alight) au temps tE ──────────
+    // Retourne {early, late} en secondes. tFirst = départ planifié du terminus.
+    function eventSigmas(tE, tripId, nowAbs) {
+        const tFirst = tripStarts[tripId];
+        const anchor = tFirst != null ? Math.max(nowAbs, tFirst) : nowAbs;
+        const dt     = Math.max(0, tE - anchor);
+        if (tE <= nowAbs) return { early: 0, late: 0 };   // événement passé : certitude
+        const s = sigmaFn(dt);
+        const notDeparted = tFirst != null && nowAbs < tFirst;
+        return { early: s, late: s + (notDeparted ? SIGMA_DEP_LATE_S : 0) };
+    }
 
     // ── Build HTML ────────────────────────────────────────────────────────────
     function build() {
@@ -203,7 +219,7 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
     function drawRow(jr, ri, nowAbs) {
         const y0   = AXIS_H + ri * ROW_H;
         const yMid = y0 + ROW_H / 2;
-        const col  = hex(JOURNEY_COLORS[ri % JOURNEY_COLORS.length]);
+        const jCol = hex(JOURNEY_COLORS[ri % JOURNEY_COLORS.length]);
         const dim  = (selectedIdx !== null && selectedIdx !== ri);
         const alpha = dim ? 0.25 : 1.0;
 
@@ -216,7 +232,8 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
             ctx.fillRect(0, y0, PANEL_W, ROW_H);
         }
 
-        // Gouttière gauche : heure départ
+        // Gouttière gauche : bonhomme (couleur du trajet) + heure départ
+        drawBonhomme(10, yMid, jCol);
         ctx.fillStyle = '#99bbdd';
         ctx.font = '10px monospace';
         ctx.textAlign = 'right';
@@ -235,43 +252,62 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
             const leg = jr.legs[li];
 
             if (leg.type === 'walk') {
-                drawWalk(leg, y0, yMid, col, jr.legs, li, nowAbs);
+                drawWalk(leg, y0, yMid, jCol, jr.legs, li, nowAbs);
             } else if (leg.type === 'wait') {
-                drawWait(leg, yMid, col);
+                drawWait(leg, yMid, jCol);
             } else if (leg.type === 'bus') {
-                drawBus(leg, y0, yMid, col, nowAbs);
+                drawBus(leg, y0, yMid, nowAbs);
             }
         }
 
         ctx.restore();
     }
 
-    function drawWalk(leg, y0, yMid, col, legs, li, nowAbs) {
+    // Mini bonhomme allumette (même silhouette que le sprite 3D), ~13 px de haut
+    function drawBonhomme(x, yMid, col) {
+        ctx.save();
+        ctx.strokeStyle = col;
+        ctx.fillStyle = col;
+        ctx.lineWidth = 1.4;
+        ctx.lineCap = 'round';
+        const yTop = yMid - 6.5;
+        ctx.beginPath(); ctx.arc(x, yTop + 1.8, 1.8, 0, Math.PI * 2); ctx.fill();   // tête
+        ctx.beginPath(); ctx.moveTo(x, yTop + 3.6); ctx.lineTo(x, yTop + 8.5); ctx.stroke();  // corps
+        ctx.beginPath(); ctx.moveTo(x - 3, yTop + 5.5); ctx.lineTo(x + 3, yTop + 5.5); ctx.stroke();  // bras
+        ctx.beginPath();
+        ctx.moveTo(x, yTop + 8.5); ctx.lineTo(x - 2.5, yTop + 13);
+        ctx.moveTo(x, yTop + 8.5); ctx.lineTo(x + 2.5, yTop + 13);
+        ctx.stroke();   // jambes
+        ctx.restore();
+    }
+
+    function drawWalk(leg, y0, yMid, jCol, legs, li, nowAbs) {
         const x1 = tX(leg.depart_s);
         const x2 = tX(leg.arrive_s);
-        // Série de points
-        ctx.fillStyle = col;
+        // Série de points — couleur du trajet (c'est le passager qui marche)
+        ctx.fillStyle = jCol;
         for (let dx = x1 + 1; dx <= x2 - 1; dx += 5) {
             ctx.beginPath();
             ctx.arc(dx, yMid, 1.8, 0, Math.PI * 2);
             ctx.fill();
         }
-        // Moustache à la fin de la marche si elle suit un bus (option A)
-        if (mode !== 'legend' && li > 0) {
+        // Moustache à la fin de la marche (option A) — hérite du σ de la descente
+        // du bus précédent. Mode moustaches seulement (le biseau le montre déjà).
+        if (mode === 'whisker' && li > 0) {
             const prevBus = findPreceding(legs, li, 'bus');
             if (prevBus) {
-                const dtAlight = Math.max(0, prevBus.alight_s - nowAbs);
-                const sigma = sigmaFn(dtAlight);
-                drawMoustache(tX(leg.arrive_s), y0, sigma, col, 'alight');
+                const sg = eventSigmas(prevBus.arrive_s, prevBus.trip_id, nowAbs);
+                const busCol = hex(LINE_COLORS[prevBus.line_id] ?? 0x888888);
+                drawWhisker(x2, y0, sg, busCol, 'alight');
             }
         }
     }
 
-    function drawWait(leg, yMid, col) {
+    function drawWait(leg, yMid, jCol) {
         const x1 = tX(leg.depart_s);
         const x2 = tX(leg.arrive_s);
         ctx.save();
-        ctx.strokeStyle = col;
+        ctx.strokeStyle = jCol;
         ctx.globalAlpha *= 0.35;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -281,15 +317,17 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
         ctx.restore();
     }
 
-    function drawBus(leg, y0, yMid, col, nowAbs) {
+    function drawBus(leg, y0, yMid, nowAbs) {
         const boardS  = leg.depart_s ?? leg.board_s;
         const alightS = leg.arrive_s ?? leg.alight_s;
         const x1 = tX(boardS);
         const x2 = tX(alightS);
         const pillY = yMid - PILL_H / 2;
+        // Couleur du CIRCUIT — identique au tracé sur la carte et aux cônes 3D
+        const col = hex(LINE_COLORS[leg.line_id] ?? 0x888888);
 
         if (mode === 'biseau') {
-            drawBiseau(leg, y0, yMid, col, nowAbs, boardS, alightS, x1, x2);
+            drawBiseau(leg, yMid, col, nowAbs, boardS, alightS, x1, x2);
         } else {
             // Pilule rectangulaire arrondie
             ctx.fillStyle = col;
@@ -302,33 +340,30 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
                 ctx.fillText(leg.base, (x1 + x2) / 2, yMid + 3);
             }
             if (mode === 'whisker') {
-                const dtBoard  = Math.max(0, boardS  - nowAbs);
-                const dtAlight = Math.max(0, alightS - nowAbs);
-                drawMoustache(x1, y0, sigmaFn(dtBoard),  col, 'board');
-                drawMoustache(x2, y0, sigmaFn(dtAlight), col, 'alight');
+                drawWhisker(x1, y0, eventSigmas(boardS,  leg.trip_id, nowAbs), col, 'board');
+                drawWhisker(x2, y0, eventSigmas(alightS, leg.trip_id, nowAbs), col, 'alight');
             }
         }
     }
 
     // ── Biseau ────────────────────────────────────────────────────────────────
-    // La pilule devient un trapèze : bord gauche droit, bord droit biseauté par σ(alight).
-    // Bord gauche biseauté par σ(board) (bus peut être en avance ou en retard au départ).
-    function drawBiseau(leg, y0, yMid, col, nowAbs, boardS, alightS, x1, x2) {
+    // La pilule devient un quadrilatère : arête du haut = frontière « retard »
+    // (p10 du temps décalé vers la droite), arête du bas = frontière « avance »
+    // (p90 du temps décalé vers la gauche). Au terminus, early=0 → coin bas-gauche
+    // exactement à l'heure planifiée ; seul un petit retard penche le coin haut-gauche.
+    function drawBiseau(leg, yMid, col, nowAbs, boardS, alightS, x1, x2) {
         const pillY = yMid - PILL_H / 2;
         const pillB = yMid + PILL_H / 2;
-        const dtB  = Math.max(0, boardS  - nowAbs);
-        const dtA  = Math.max(0, alightS - nowAbs);
-        const sigB = tX(boardS  + sigmaFn(dtB))  - x1;  // px d'écart σ au départ
-        const sigA = tX(alightS + sigmaFn(dtA)) - x2;   // px d'écart σ à l'arrivée
+        const sgB = eventSigmas(boardS,  leg.trip_id, nowAbs);
+        const sgA = eventSigmas(alightS, leg.trip_id, nowAbs);
 
-        // Trapèze : 4 sommets (sens horaire)
-        // Haut : bord gauche décalé de +σ_board (p90), bord droit décalé de +σ_alight
-        // Bas  : bord gauche décalé de -σ_board (p10), bord droit décalé de -σ_alight
+        // Sommets (sens horaire) :
+        // Haut = côté « plus tard » (+late) ; bas = côté « plus tôt » (−early)
         const pts = [
-            [x1 + sigB, pillY],   // haut-gauche (p90 board)
-            [x2 + sigA, pillY],   // haut-droit  (p90 alight)
-            [x2 - sigA, pillB],   // bas-droit   (p10 alight)
-            [x1 - sigB, pillB],   // bas-gauche  (p10 board)
+            [x1 + sToPx(sgB.late),  pillY],   // haut-gauche : board p90 (retard)
+            [x2 + sToPx(sgA.late),  pillY],   // haut-droit  : alight p90 (retard)
+            [x2 - sToPx(sgA.early), pillB],   // bas-droit   : alight p10 (avance)
+            [x1 - sToPx(sgB.early), pillB],   // bas-gauche  : board p10 (avance)
         ];
 
         ctx.fillStyle = col;
@@ -348,37 +383,38 @@ export function createJourneyPanel({ container, journeysData, onJourneySelect })
         }
     }
 
-    // ── Moustache (triangle) ──────────────────────────────────────────────────
-    // type 'alight' → dans la partie haute de la rangée, pointe vers p90 (droite = plus tard)
-    // type 'board'  → dans la partie basse de la rangée, pointe vers p10 (gauche = plus tôt)
-    function drawMoustache(xBase, y0, sigma, col, type) {
-        if (sigma < 0.5) return;          // incertitude négligeable (< 0.5 s)
-        const sigPx = tX(tMin + sigma) - tX(tMin);  // σ en pixels
-        if (sigPx < 1) return;
+    // ── Moustache : intervalle p10–p90 d'un événement bus ────────────────────
+    // Deux triangles partageant la base verticale à p50 : pointe gauche = p10
+    // (plus tôt), pointe droite = p90 (plus tard). Au terminus, early=0 → seul
+    // le petit triangle « retard » apparaît.
+    // type 'alight' → partie haute de la rangée ; 'board' → partie basse.
+    function drawWhisker(xBase, y0, sigmas, col, type) {
+        const earlyPx = sToPx(sigmas.early);
+        const latePx  = sToPx(sigmas.late);
+        if (earlyPx < 1 && latePx < 1) return;
 
         ctx.save();
         ctx.fillStyle = col;
         ctx.globalAlpha *= 0.75;
 
-        const halfH = ROW_H * 0.38;    // hauteur de base du triangle
-        if (type === 'alight') {
-            // Haut de rangée ; pointe vers la droite (p90 = en retard)
-            const yTop = y0 + 1;
-            const yBot = y0 + halfH;
-            ctx.beginPath();
-            ctx.moveTo(xBase, yBot);        // base gauche
-            ctx.lineTo(xBase, yTop);        // base droite (verticale)
-            ctx.lineTo(xBase + sigPx, (yTop + yBot) / 2);  // pointe
-            ctx.closePath();
-            ctx.fill();
-        } else {
-            // Bas de rangée ; pointe vers la gauche (p10 = en avance)
-            const yTop = y0 + ROW_H - halfH;
-            const yBot = y0 + ROW_H - 1;
+        const halfH = ROW_H * 0.38;
+        const yTop = type === 'alight' ? y0 + 1 : y0 + ROW_H - halfH;
+        const yBot = type === 'alight' ? y0 + halfH : y0 + ROW_H - 1;
+        const yMidT = (yTop + yBot) / 2;
+
+        if (earlyPx >= 1) {       // triangle vers p10 (gauche = plus tôt)
             ctx.beginPath();
             ctx.moveTo(xBase, yTop);
             ctx.lineTo(xBase, yBot);
-            ctx.lineTo(xBase - sigPx, (yTop + yBot) / 2);
+            ctx.lineTo(xBase - earlyPx, yMidT);
+            ctx.closePath();
+            ctx.fill();
+        }
+        if (latePx >= 1) {        // triangle vers p90 (droite = plus tard)
+            ctx.beginPath();
+            ctx.moveTo(xBase, yTop);
+            ctx.lineTo(xBase, yBot);
+            ctx.lineTo(xBase + latePx, yMidT);
             ctx.closePath();
             ctx.fill();
         }

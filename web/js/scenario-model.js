@@ -47,7 +47,17 @@ export function makeSched(schedule) {
 // ── Construction du cône prédit à partir de « maintenant » ────────────────
 // nowAbs : maintenant en sec depuis minuit. nowRel : maintenant relatif à T0
 // (référence des t de trajectoire pour l'axe vertical du renderer).
-export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigmaFn) {
+//
+// tFirst (optionnel) : heure de départ planifiée du terminus. L'incertitude
+// d'adhérence ne s'accumule qu'en roulant : ancrée à max(now, tFirst), pas à
+// now. Un bus pas encore parti ne peut PAS être en avance (p90 = p50 au
+// terminus) ; il peut seulement partir en léger retard (petit σ côté retard).
+// Sans tFirst, comportement historique (σ symétrique ancré à now).
+export const SIGMA_DEP_LATE_S = 60;   // retard plausible au départ du terminus
+
+export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigmaFn, tFirst = -Infinity) {
+    const anchor      = Math.max(nowAbs, tFirst);
+    const notDeparted = nowAbs < tFirst;
     const pts = [];
     let prev = null;
     const n = Math.round(horizonS / stepS);
@@ -59,9 +69,12 @@ export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigma
         if (k === 0) {
             p10 = p90 = p50;
         } else {
-            const s = sigmaFn(dt);
-            p10 = sched(tAbs - s);
-            p90 = sched(tAbs + s);
+            const dtEff  = Math.max(0, tAbs - anchor);
+            const s      = sigmaFn(dtEff);
+            const sLate  = s + (notDeparted ? SIGMA_DEP_LATE_S : 0);
+            const sEarly = s;     // nul au terminus (dtEff=0) : aucune avance possible
+            p10 = sched(tAbs - sLate);    // en retard = moins avancé sur le tracé
+            p90 = sched(tAbs + sEarly);   // en avance = plus avancé
         }
         // Invariants : bornes + ordre p10 ≤ p50 ≤ p90
         p50 = Math.min(Math.max(p50, 0), lengthM);
@@ -125,7 +138,7 @@ export function createScheduleModel({ index, circuits }) {
         for (const v of vehicles) {
             // Garder les passages actifs dans la fenêtre prédite [now, now+horizon]
             if (v.tLast < nowAbs || v.tFirst > winHi) continue;
-            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizon, step, sigmaFn);
+            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizon, step, sigmaFn, v.tFirst);
             out.push({ vehicle_id: v.vehicle_id, line_id: v.line_id, trajectory: traj });
         }
         return { sim_time: nowRel, vehicles: out, transfers: [], passenger: null };

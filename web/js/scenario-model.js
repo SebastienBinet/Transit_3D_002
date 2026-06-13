@@ -55,9 +55,29 @@ export function makeSched(schedule) {
 // Sans tFirst, comportement historique (σ symétrique ancré à now).
 export const SIGMA_DEP_LATE_S = 60;   // retard plausible au départ du terminus
 
-export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigmaFn, tFirst = -Infinity) {
+// Délai entre le dernier rapport de position GPS et « maintenant ».
+// Quand > 0, le σ s'accumule depuis t_report (now − lag) et non depuis now :
+// σ_réduit(dt) = σ(dt + lag) − σ(lag), ce qui rend le cône bien plus étroit
+// pour les événements proches tout en convergeant vers l'ancien modèle au loin.
+export const REPORT_LAG_S = 120;      // 2 min — valeur par défaut Cas 6
+
+// ── Σ réduit ancré au dernier rapport ─────────────────────────────────────
+// Maintient l'invariant σ_réduit(0)=0 tout en reflétant qu'on "a déjà consommé"
+// une partie de l'incertitude jusqu'au moment du rapport.
+export function makeReducedSigma(sigmaFn, lag_s) {
+    if (!lag_s || lag_s <= 0) return sigmaFn;
+    const base = sigmaFn(lag_s);
+    return (dt_s) => Math.max(0, sigmaFn(Math.max(0, dt_s) + lag_s) - base);
+}
+
+export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigmaFn, tFirst = -Infinity, reportLag_s = 0) {
     const anchor      = Math.max(nowAbs, tFirst);
     const notDeparted = nowAbs < tFirst;
+    // σ réduit pour les bus en route avec rapport GPS récent.
+    // Bus en attente au terminus : on sait où il est (position fixe), on garde l'ancien σ.
+    const effSigma = (!notDeparted && reportLag_s > 0)
+        ? makeReducedSigma(sigmaFn, reportLag_s)
+        : sigmaFn;
     const pts = [];
     let prev = null;
     const n = Math.round(horizonS / stepS);
@@ -70,7 +90,7 @@ export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigma
             p10 = p90 = p50;
         } else {
             const dtEff  = Math.max(0, tAbs - anchor);
-            const s      = sigmaFn(dtEff);
+            const s      = effSigma(dtEff);
             const sLate  = s + (notDeparted ? SIGMA_DEP_LATE_S : 0);
             const sEarly = s;     // nul au terminus (dtEff=0) : aucune avance possible
             p10 = sched(tAbs - sLate);    // en retard = moins avancé sur le tracé

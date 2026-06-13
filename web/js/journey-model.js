@@ -6,7 +6,7 @@
 // Interface identique à createScheduleModel (compatible player dans index.html),
 // avec en plus getPassengerPositions(tAbs) pour les mises à jour continues.
 
-import { makeSched, makeSigma, buildCone } from './scenario-model.js';
+import { makeSched, makeSigma, buildCone, REPORT_LAG_S } from './scenario-model.js';
 import { progressToLatLon }               from './interpolation.js';
 import { JOURNEY_COLORS }                 from './colors.js';
 
@@ -100,7 +100,7 @@ export function createJourneyModel({ journeysData, circuits }) {
         const vehicleFrames = [];
         for (const v of vehicles) {
             if (v.tLast < nowAbs || v.tFirst > winHi) continue;
-            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizonS, STEP, sigmaFn, v.tFirst);
+            const traj = buildCone(v.sched, v.lengthM, nowAbs, nowRel, horizonS, STEP, sigmaFn, v.tFirst, REPORT_LAG_S);
             vehicleFrames.push({ vehicle_id: v.vehicle_id, line_id: v.line_id, trajectory: traj });
         }
         const passengers = journeysData.journeys.map((jr, i) => ({

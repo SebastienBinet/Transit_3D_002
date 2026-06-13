@@ -9,7 +9,7 @@
 // Un bus pas encore parti ne peut pas être en avance : côté p10 nul au terminus,
 // petit σ côté retard (SIGMA_DEP_LATE_S).
 
-import { makeSigma, SIGMA_DEP_LATE_S } from './scenario-model.js';
+import { makeSigma, makeReducedSigma, SIGMA_DEP_LATE_S, REPORT_LAG_S } from './scenario-model.js';
 import { LINE_COLORS, JOURNEY_COLORS } from './colors.js';
 
 const PANEL_W   = 420;
@@ -28,7 +28,8 @@ function fmtT(s) {
 }
 
 export function createJourneyPanel({ container, journeysData, tripStarts = {}, onJourneySelect }) {
-    const sigmaFn = makeSigma({ kind: 'power', coeff_min: 3.0, exp: 0.301 });
+    const sigmaFn    = makeSigma({ kind: 'power', coeff_min: 3.0, exp: 0.301 });
+    const reducedSig = makeReducedSigma(sigmaFn, REPORT_LAG_S);
     const t0      = journeysData.depart_after_s;
     const tMin    = t0 - 60;
     const tMax    = Math.max(...journeysData.journeys.map(j => j.arrival_s)) + 360;
@@ -50,12 +51,13 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     // ── σ asymétrique d'un événement bus (board/alight) au temps tE ──────────
     // Retourne {early, late} en secondes. tFirst = départ planifié du terminus.
     function eventSigmas(tE, tripId, nowAbs) {
-        const tFirst = tripStarts[tripId];
-        const anchor = tFirst != null ? Math.max(nowAbs, tFirst) : nowAbs;
-        const dt     = Math.max(0, tE - anchor);
         if (tE <= nowAbs) return { early: 0, late: 0 };   // événement passé : certitude
-        const s = sigmaFn(dt);
+        const tFirst      = tripStarts[tripId];
         const notDeparted = tFirst != null && nowAbs < tFirst;
+        const anchor      = tFirst != null ? Math.max(nowAbs, tFirst) : nowAbs;
+        const dt          = Math.max(0, tE - anchor);
+        // Bus en route → σ réduit (rapport GPS 2 min avant) ; en attente → σ brut
+        const s = notDeparted ? sigmaFn(dt) : reducedSig(dt);
         return { early: s, late: s + (notDeparted ? SIGMA_DEP_LATE_S : 0) };
     }
 

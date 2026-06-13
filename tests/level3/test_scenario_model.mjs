@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSigma, makeSched, buildCone, createScheduleModel }
+import { makeSigma, makeReducedSigma, makeSched, buildCone, REPORT_LAG_S, createScheduleModel }
     from '../../web/js/scenario-model.js';
 
 // ── makeSigma ─────────────────────────────────────────────────────────────
@@ -144,6 +144,78 @@ test('buildCone sans tFirst : comportement historique inchangé', () => {
     const a = buildCone(fn, 500, 100, 0, 120, 60, sigmaFn);
     const b = buildCone(fn, 500, 100, 0, 120, 60, sigmaFn, -Infinity);
     assert.deepEqual(a, b);
+});
+
+// ── makeReducedSigma + buildCone avec reportLag ───────────────────────────
+const lag = REPORT_LAG_S;   // 120 s
+
+test('makeReducedSigma(0) = 0 (invariant t=0)', () => {
+    const rs = makeReducedSigma(sigmaFn, lag);
+    assert.equal(rs(0), 0);
+});
+
+test('makeReducedSigma croît avec dt', () => {
+    const rs = makeReducedSigma(sigmaFn, lag);
+    assert.ok(rs(60) < rs(600));
+    assert.ok(rs(600) < rs(3600));
+});
+
+test('makeReducedSigma < sigmaFn pour dt petit (rapport GPS réduit l\'incertitude)', () => {
+    const rs = makeReducedSigma(sigmaFn, lag);
+    // À 1 min, le cône réduit doit être beaucoup plus étroit
+    assert.ok(rs(60) < sigmaFn(60),
+        `σ_réduit(60)=${rs(60).toFixed(1)} devrait être < σ(60)=${sigmaFn(60).toFixed(1)}`);
+    assert.ok(rs(600) < sigmaFn(600),
+        `σ_réduit(600)=${rs(600).toFixed(1)} devrait être < σ(600)=${sigmaFn(600).toFixed(1)}`);
+});
+
+test('makeReducedSigma sans lag = sigmaFn', () => {
+    const rs = makeReducedSigma(sigmaFn, 0);
+    assert.ok(rs === sigmaFn, 'lag=0 doit retourner sigmaFn inchangé');
+});
+
+test('buildCone+reportLag : invariant p10=p50=p90 à k=0 maintenu', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    // Bus en route (nowAbs > tFirst) : reportLag actif
+    const traj = buildCone(fn, 1000, 1200, 0, 600, 60, sigmaFn, tFirst, lag);
+    const pt0 = traj[0];
+    assert.equal(pt0.p10, pt0.p50);
+    assert.equal(pt0.p50, pt0.p90);
+});
+
+test('buildCone+reportLag : cône plus étroit qu\'ancien modèle à court terme', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    // nowAbs=1200 (200 s après départ terminus à 1000)
+    const old = buildCone(fn, 1000, 1200, 0, 600, 60, sigmaFn, tFirst, 0);
+    const red = buildCone(fn, 1000, 1200, 0, 600, 60, sigmaFn, tFirst, lag);
+    // À 60 s dans le futur, le σ réduit doit donner un cône plus petit
+    const oldW = old[1].p90 - old[1].p10;
+    const redW = red[1].p90 - red[1].p10;
+    assert.ok(redW < oldW,
+        `cône réduit (${redW.toFixed(1)}) devrait être < ancien (${oldW.toFixed(1)})`);
+});
+
+test('buildCone+reportLag : invariants p10≤p50≤p90 et monotonie conservés', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    const traj = buildCone(fn, 1000, 1200, 0, 600, 60, sigmaFn, tFirst, lag);
+    for (let i = 0; i < traj.length; i++) {
+        const pt = traj[i];
+        assert.ok(pt.p10 <= pt.p50 && pt.p50 <= pt.p90);
+        if (i > 0) {
+            assert.ok(pt.p10 >= traj[i - 1].p10);
+            assert.ok(pt.p50 >= traj[i - 1].p50);
+            assert.ok(pt.p90 >= traj[i - 1].p90);
+        }
+    }
+});
+
+test('buildCone+reportLag : bus non-parti conserve l\'ancien comportement', () => {
+    const { fn, tFirst } = makeSched(farSchedule);
+    // nowAbs=100 < tFirst=1000 : bus pas encore parti, lag ignoré
+    const noLag = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn, tFirst, 0);
+    const withL = buildCone(fn, 1000, 100, 0, 1800, 60, sigmaFn, tFirst, lag);
+    // Les deux doivent être identiques (notDeparted → effSigma = sigmaFn)
+    assert.deepEqual(noLag, withL);
 });
 
 // ── createScheduleModel : interface player ────────────────────────────────

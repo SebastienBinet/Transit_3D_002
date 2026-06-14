@@ -277,6 +277,83 @@ def search(case, stops, trips, nearby, board_idx):
     return origin, dest, depart_s, journeys
 
 
+# ── Curation Cas 6 ─────────────────────────────────────────────────────────
+def first_per_line_set(journeys):
+    """Garde le 1er trajet (plus tôt) pour chaque ensemble de lignes unique."""
+    seen: set[frozenset] = set()
+    kept = []
+    for jr in journeys:
+        key = frozenset(leg["base"] for leg in jr["legs"])
+        if key not in seen:
+            seen.add(key)
+            kept.append(jr)
+    return kept
+
+
+def build_next165_fallback(stops, origin_pt, dest_pt):
+    """Construit le trajet de secours Cas 6 : 51N/295364460 → 165S/294909918 → 144N/295446235.
+    Représente le scénario « rate le premier 165, prend le suivant, arrive à 8h17 »."""
+    def find_g(stop_id, line_id):
+        for i, s in enumerate(stops):
+            if s["stop_id"] == stop_id and s["line_id"] == line_id:
+                return i
+        raise KeyError(f"Stop {stop_id}/{line_id} non trouvé dans le réseau chargé")
+
+    g_50828 = find_g("50828", "51N")
+    g_53677 = find_g("53677", "51N")
+    g_51253 = find_g("51253", "165S")
+    g_51841 = find_g("51841", "165S")
+    g_51896 = find_g("51896", "144N")
+    g_52218 = find_g("52218", "144N")
+
+    s = [stops[i] for i in (g_50828, g_53677, g_51253, g_51841, g_51896, g_52218)]
+
+    # Utiliser la même distance d'accès que le Dijkstra (arrêt le plus proche de l'origine),
+    # pour rester cohérent avec les trajets 1-3 qui débutent par la marche vers l'arrêt voisin.
+    access_dist = min(
+        dist_m(origin_pt["lat"], origin_pt["lon"], st["lat"], st["lon"])
+        for st in stops
+    )
+    walk_s_01   = dist_m(s[1]["lat"], s[1]["lon"], s[2]["lat"], s[2]["lon"]) / WALK_SPEED_MPS
+    walk_s_12   = dist_m(s[3]["lat"], s[3]["lon"], s[4]["lat"], s[4]["lon"]) / WALK_SPEED_MPS
+    egress_dist = dist_m(s[5]["lat"], s[5]["lon"], dest_pt["lat"], dest_pt["lon"])
+
+    return {
+        "arrival_s":     29849.0 + egress_dist / WALK_SPEED_MPS,
+        "egress_stop":   g_52218,
+        "egress_walk_s": egress_dist / WALK_SPEED_MPS,
+        "egress_dist":   egress_dist,
+        "meta": {
+            "access_stop":   g_50828,
+            "access_walk_s": access_dist / WALK_SPEED_MPS,
+            "access_dist":   access_dist,
+        },
+        "legs": [
+            {
+                "line_id": "51N", "base": "51", "trip_id": "295364460",
+                "board_stop": g_50828, "board_s": 25541.0,
+                "alight_stop": g_53677, "alight_s": 26340.0,
+                "from_walk_stop": g_50828, "from_walk_s": access_dist / WALK_SPEED_MPS,
+                "n_stops": 13,
+            },
+            {
+                "line_id": "165S", "base": "165", "trip_id": "294909918",
+                "board_stop": g_51253, "board_s": 26878.0,
+                "alight_stop": g_51841, "alight_s": 27420.0,
+                "from_walk_stop": g_53677, "from_walk_s": walk_s_01,
+                "n_stops": 9,
+            },
+            {
+                "line_id": "144N", "base": "144", "trip_id": "295446235",
+                "board_stop": g_51896, "board_s": 29424.0,
+                "alight_stop": g_52218, "alight_s": 29849.0,
+                "from_walk_stop": g_51841, "from_walk_s": walk_s_12,
+                "n_stops": 10,
+            },
+        ],
+    }
+
+
 # ── Mise en forme de la table de sortie ────────────────────────────────────
 def hms(s):
     s = int(round(s))
@@ -389,6 +466,17 @@ def format_journey(rank, jr, stops, depart_s, origin_pt, dest_pt):
 
 def build_case(case, stops, trips, nearby, board_idx):
     origin, dest, depart_s, journeys = search(case, stops, trips, nearby, board_idx)
+
+    # Cas 6 : conserver un seul trajet par combinaison de lignes (le plus tôt),
+    # puis ajouter le trajet de secours « prochain 165 » explicite.
+    if case["id"] == "6":
+        journeys = first_per_line_set(journeys)
+        try:
+            fallback = build_next165_fallback(stops, origin, dest)
+            journeys = sorted(journeys + [fallback], key=lambda jr: jr["arrival_s"])
+        except KeyError as e:
+            print(f"  Avertissement : trajet 51→next165→144 non construit ({e})")
+
     return {
         "case": case["id"],
         "label": case["label"],

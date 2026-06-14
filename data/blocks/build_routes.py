@@ -18,7 +18,7 @@ CACHE_DIR  = Path(__file__).parent.parent / "cache" / "gtfs"
 OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
 
 # ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
-TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480"}
+TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480", "103", "24"}
 
 # On exporte les DEUX directions (N et S) pour toutes les lignes.
 BIDIRECTIONAL = set(TARGET_ROUTES)
@@ -35,6 +35,8 @@ LINE_COLORS_HEX = {
     "144N": "#88ff44", "144S": "#55cc11",   # vert lime
     "124N": "#ff9900", "124S": "#cc6600",   # orange foncé / brun-orange
     "480N": "#9900cc", "480S": "#6600aa",   # violet / mauve foncé
+    "103N": "#ff6600", "103S": "#cc4400",   # orange-rouge
+    "24N":  "#00ccaa", "24S":  "#009977",   # turquoise
 }
 
 LAT_M = 111_000.0

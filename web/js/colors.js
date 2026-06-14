@@ -14,6 +14,8 @@ export const LINE_COLORS = {
     "144N": 0x88ff44, "144S": 0x55cc11,
     "124N": 0xff9900, "124S": 0xcc6600,
     "480N": 0x9900cc, "480S": 0x6600aa,
+    "103N": 0xff6600, "103S": 0xcc4400,
+    "24N":  0x00ccaa, "24S":  0x009977,
 };
 
 // Couleur par trajet (Cas 6) — une par passager/bonhomme, max 8.

@@ -356,6 +356,82 @@ def build_next165_fallback(stops, origin_pt, dest_pt):
     }
 
 
+def _build_103_24_144_fallback(stops, origin_pt, dest_pt, base_jr,
+                               trip_24: str, board_24_s: float, alight_24_s: float,
+                               trip_144: str, board_144_s: float, alight_144_s: float) -> dict:
+    """Constructeur partagé pour les deux fallbacks 103→24→144.
+    Réutilise la meta d'accès du trajet de base pour garantir la cohérence animation."""
+    def find_g(stop_id, line_id):
+        for i, s in enumerate(stops):
+            if s["stop_id"] == stop_id and s["line_id"] == line_id:
+                return i
+        raise KeyError(f"Stop {stop_id}/{line_id} non trouvé")
+
+    g_50798 = find_g("50798", "103N")
+    g_51243 = find_g("51243", "103N")
+    g_51241 = find_g("51241", "24N")
+    g_51951 = find_g("51951", "24N")
+    g_51990 = find_g("51990", "144N")
+    g_52218 = find_g("52218", "144N")
+
+    s_51243 = stops[g_51243]; s_51241 = stops[g_51241]
+    s_51951 = stops[g_51951]; s_51990 = stops[g_51990]
+    s_52218 = stops[g_52218]
+
+    walk_s_01   = dist_m(s_51243["lat"], s_51243["lon"], s_51241["lat"], s_51241["lon"]) / WALK_SPEED_MPS
+    walk_s_12   = dist_m(s_51951["lat"], s_51951["lon"], s_51990["lat"], s_51990["lon"]) / WALK_SPEED_MPS
+    egress_dist = dist_m(s_52218["lat"], s_52218["lon"], dest_pt["lat"], dest_pt["lon"])
+
+    return {
+        "arrival_s":     alight_144_s + egress_dist / WALK_SPEED_MPS,
+        "egress_stop":   g_52218,
+        "egress_walk_s": egress_dist / WALK_SPEED_MPS,
+        "egress_dist":   egress_dist,
+        "meta": base_jr["meta"],   # même accès que le trajet de base 103→24→144
+        "legs": [
+            {
+                "line_id": "103N", "base": "103", "trip_id": "295372023",
+                "board_stop": g_50798, "board_s": 25874.0,
+                "alight_stop": g_51243, "alight_s": 26640.0,
+                "from_walk_stop": g_50798, "from_walk_s": base_jr["meta"]["access_walk_s"],
+                "n_stops": 10,
+            },
+            {
+                "line_id": "24N", "base": "24", "trip_id": trip_24,
+                "board_stop": g_51241, "board_s": board_24_s,
+                "alight_stop": g_51951, "alight_s": alight_24_s,
+                "from_walk_stop": g_51243, "from_walk_s": walk_s_01,
+                "n_stops": 15,
+            },
+            {
+                "line_id": "144N", "base": "144", "trip_id": trip_144,
+                "board_stop": g_51990, "board_s": board_144_s,
+                "alight_stop": g_52218, "alight_s": alight_144_s,
+                "from_walk_stop": g_51951, "from_walk_s": walk_s_12,
+                "n_stops": 12,
+            },
+        ],
+    }
+
+
+def build_next24_fallback(stops, origin_pt, dest_pt, base_jr) -> dict:
+    """Rate le 1er 24N (93s de marge), prend le suivant (295430768, +11 min) → arr 8h17."""
+    return _build_103_24_144_fallback(
+        stops, origin_pt, dest_pt, base_jr,
+        trip_24="295430768",  board_24_s=27420.0,  alight_24_s=28560.0,
+        trip_144="295446235", board_144_s=29329.0,  alight_144_s=29849.0,
+    )
+
+
+def build_next144_fallback(stops, origin_pt, dest_pt, base_jr) -> dict:
+    """Même 24N, rate le 144N (120s de marge), prend le suivant (295446235) → arr 8h17."""
+    return _build_103_24_144_fallback(
+        stops, origin_pt, dest_pt, base_jr,
+        trip_24="295430732",  board_24_s=26760.0,  alight_24_s=27780.0,
+        trip_144="295446235", board_144_s=29329.0,  alight_144_s=29849.0,
+    )
+
+
 # ── Mise en forme de la table de sortie ────────────────────────────────────
 def hms(s):
     s = int(round(s))
@@ -470,14 +546,32 @@ def build_case(case, stops, trips, nearby, board_idx):
     origin, dest, depart_s, journeys = search(case, stops, trips, nearby, board_idx)
 
     # Cas 6 : conserver un seul trajet par combinaison de lignes (le plus tôt),
-    # puis ajouter le trajet de secours « prochain 165 » explicite.
+    # puis ajouter les fallbacks explicites pour les transferts risqués.
     if case["id"] == "6":
         journeys = first_per_line_set(journeys)
+
+        extras = []
+
+        # Fallback 51→165 : prochain 165 → même 144, arr toujours 7h55
         try:
-            fallback = build_next165_fallback(stops, origin, dest)
-            journeys = sorted(journeys + [fallback], key=lambda jr: jr["arrival_s"])
+            extras.append(build_next165_fallback(stops, origin, dest))
         except KeyError as e:
-            print(f"  Avertissement : trajet 51→next165→144 non construit ({e})")
+            print(f"  Avertissement : fallback next-165 non construit ({e})")
+
+        # Fallbacks 103→24→144 : deux transferts risqués, deux scénarios « prochain bus »
+        base_103_24 = next(
+            (jr for jr in journeys
+             if frozenset(leg["base"] for leg in jr["legs"]) == {"103", "24", "144"}),
+            None,
+        )
+        if base_103_24:
+            try:
+                extras.append(build_next24_fallback(stops, origin, dest, base_103_24))
+                extras.append(build_next144_fallback(stops, origin, dest, base_103_24))
+            except KeyError as e:
+                print(f"  Avertissement : fallbacks 103/24 non construits ({e})")
+
+        journeys = sorted(journeys + extras, key=lambda jr: jr["arrival_s"])
 
     return {
         "case": case["id"],

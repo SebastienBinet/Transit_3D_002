@@ -30,6 +30,7 @@ const B_DRAW_H    = BANDES_H - B_TOP_PAD - B_BOT_PAD;
 const B_T0        = 25200;   // 7h00
 const B_T_END     = 30120;   // 8h22 — marge au-dessus de 29857
 const B_GRP_GAP   = 10;      // espace horizontal entre groupes
+const B_BAND_HALF_MAX = 12;  // demi-largeur max d'une bande (bandes étroites)
 
 function hex(n) { return '#' + n.toString(16).padStart(6, '0'); }
 function fmtT(s) {
@@ -47,6 +48,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
     let mode        = 'biseau';   // 'legend' | 'biseau' | 'bandes'
     let orderMethod = 'best';     // 'best' | 'mean'
+    let bandShape   = 'enveloppe';// 'enveloppe' | 'retard'
     let pinned      = false;
     let collapsed   = false;
     let selectedIdx = null;      // null = tous, number = trajet sélectionné
@@ -97,20 +99,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             o.value = v; o.textContent = l; modeEl.appendChild(o);
         });
         modeEl.value = mode;
-        modeEl.onchange = e => {
-            mode = e.target.value;
-            orderEl.style.display = mode === 'bandes' ? '' : 'none';
-            renderContent();
-        };
-
-        const orderEl = document.createElement('select');
-        orderEl.style.cssText = 'background:#1a2a3a; color:#cdd; border:1px solid #446; padding:2px 4px; border-radius:4px; font-size:10px; font-family:monospace; display:none;';
-        [['best', 'Meilleure arr.'], ['mean', 'Arr. moy.']].forEach(([v, l]) => {
-            const o = document.createElement('option');
-            o.value = v; o.textContent = l; orderEl.appendChild(o);
-        });
-        orderEl.value = orderMethod;
-        orderEl.onchange = e => { orderMethod = e.target.value; if (mode === 'bandes') drawBandes(); };
+        modeEl.onchange = e => { mode = e.target.value; renderContent(); };
 
         const pinBtn = mkBtn('📌', 'Fantôme — interactions 3D passent au travers');
         pinBtn.onclick = () => {
@@ -129,7 +118,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             colBtn.title = collapsed ? 'Déplier la vignette' : 'Replier la vignette';
         };
 
-        hdr.append(title, modeEl, orderEl, pinBtn, colBtn);
+        hdr.append(title, modeEl, pinBtn, colBtn);
         contentDiv = document.createElement('div');
         contentDiv.id = 'jp-content';
         container.append(hdr, contentDiv);
@@ -141,6 +130,19 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         b.textContent = label; b.title = title;
         b.style.cssText = 'padding:2px 5px; font-size:11px; min-width:26px;';
         return b;
+    }
+
+    function mkSelect(opts, value, title, onchange) {
+        const sel = document.createElement('select');
+        sel.style.cssText = 'background:#1a2a3a; color:#cdd; border:1px solid #446; padding:2px 4px; border-radius:4px; font-size:10px; font-family:monospace;';
+        sel.title = title;
+        opts.forEach(([v, l]) => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = l; sel.appendChild(o);
+        });
+        sel.value = value;
+        sel.onchange = e => onchange(e.target.value);
+        return sel;
     }
 
     // ── Rendu du contenu ──────────────────────────────────────────────────────
@@ -363,6 +365,21 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     }
 
     function renderBandesCanvas() {
+        // Barre de sous-options propre aux bandes
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex; gap:5px; margin-bottom:4px;';
+        bar.append(
+            mkSelect(
+                [['best', 'Meilleure arr.'], ['mean', 'Arr. moy.']],
+                orderMethod, 'Ordre des groupes (gauche → droite)',
+                v => { orderMethod = v; drawBandes(); }),
+            mkSelect(
+                [['enveloppe', 'Enveloppe'], ['retard', 'Symétrique p90']],
+                bandShape, 'Forme des pointes : enveloppe (pointe départ = p10) ou symétrique (pointe départ = p90)',
+                v => { bandShape = v; drawBandes(); }),
+        );
+        contentDiv.appendChild(bar);
+
         bandsCvs = document.createElement('canvas');
         bandsCvs.width  = PANEL_W;
         bandsCvs.height = BANDES_H;
@@ -392,7 +409,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         const nowAbs = t0 + simTime;
         const groups = groupJourneys();
         const bandW  = computeBandW(groups);
-        const halfW  = bandW / 2 - 1;   // demi-largeur du losange (1 px de marge)
+        const halfW  = Math.min(bandW / 2 - 1, B_BAND_HALF_MAX);   // bande étroite, centrée dans sa colonne
 
         c.clearRect(0, 0, PANEL_W, BANDES_H);
 
@@ -461,14 +478,21 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const sgA = eventSigmas(alightS, leg.trip_id, nowAbs);
             const col = hex(LINE_COLORS[leg.line_id] ?? 0x888888);
 
-            // Six sommets du losange (hexagone pointu haut+bas) :
-            // pointe haute = p90 d'arrivée (pire cas, bus retardé)
-            // épaulements = p10 (meilleur cas)
-            // pointe basse = p10 de montée (bus en avance)
-            const yTopApex = btY(alightS + sgA.late);   // pointe haute
-            const yTopBody = btY(alightS - sgA.early);  // épaulement haut
-            const yBotBody = btY(boardS  + sgB.late);   // épaulement bas
-            const yBotApex = btY(boardS  - sgB.early);  // pointe basse
+            // Hexagone pointu en haut et en bas.
+            // Arrivée (haut) : pointe = p90 (pire cas, bus retardé), épaulements = p10.
+            const yTopApex = btY(alightS + sgA.late);   // pointe haute = p90 arrivée
+            const yTopBody = btY(alightS - sgA.early);  // épaulements = p10 arrivée
+            // Départ (bas) : deux formes au choix.
+            //  'enveloppe' : pointe basse = p10 (avance) → silhouette = enveloppe temporelle complète.
+            //  'retard'    : p90 au centre, p10 aux coins gauche/droite → symétrique avec l'arrivée.
+            let yBotApex, yBotBody;
+            if (bandShape === 'retard') {
+                yBotApex = btY(boardS + sgB.late);    // p90 au centre (pointe vers le haut)
+                yBotBody = btY(boardS - sgB.early);   // p10 aux pointes gauche/droite
+            } else {
+                yBotApex = btY(boardS - sgB.early);   // p10 au centre (pointe vers le bas)
+                yBotBody = btY(boardS + sgB.late);    // p90 aux épaulements
+            }
 
             c.fillStyle = col;
             c.beginPath();
@@ -481,12 +505,12 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             c.closePath();
             c.fill();
 
-            // Numéro de ligne au centre du corps (entre les épaulements)
-            if (yBotApex - yTopApex > 14) {
-                const yCtr = (yTopBody + yBotBody) / 2;
+            // Numéro de ligne au centre du corps (médiane p50→p50)
+            const yMid50 = (btY(boardS) + btY(alightS)) / 2;
+            if (btY(boardS) - btY(alightS) > 14) {
                 c.fillStyle = 'rgba(255,255,255,0.9)';
                 c.font = 'bold 8px monospace'; c.textAlign = 'center';
-                c.fillText(leg.base, xCenter, yCtr + 3);
+                c.fillText(leg.base, xCenter, yMid50 + 3);
             }
 
             // Trait de connexion vers le bus suivant (p50 alight → p50 board suivant)

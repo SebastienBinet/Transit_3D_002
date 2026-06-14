@@ -10,6 +10,20 @@
   },
   "circuits": [
     {
+      "line_id": "103N",
+      "gtfs_direction_id": "0",
+      "color": "#ff6600",
+      "file": "circuits/103N.json",
+      "n_trips": 18
+    },
+    {
+      "line_id": "103S",
+      "gtfs_direction_id": "1",
+      "color": "#cc4400",
+      "file": "circuits/103S.json",
+      "n_trips": 5
+    },
+    {
       "line_id": "11N",
       "gtfs_direction_id": "1",
       "color": "#44cc44",
@@ -91,6 +105,20 @@
       "gtfs_direction_id": "0",
       "color": "#cc5511",
       "file": "circuits/165S.json",
+      "n_trips": 22
+    },
+    {
+      "line_id": "24N",
+      "gtfs_direction_id": "1",
+      "color": "#00ccaa",
+      "file": "circuits/24N.json",
+      "n_trips": 19
+    },
+    {
+      "line_id": "24S",
+      "gtfs_direction_id": "0",
+      "color": "#009977",
+      "file": "circuits/24S.json",
       "n_trips": 22
     },
     {

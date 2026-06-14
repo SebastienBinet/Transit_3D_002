@@ -291,8 +291,10 @@ def first_per_line_set(journeys):
 
 
 def build_next165_fallback(stops, origin_pt, dest_pt):
-    """Construit le trajet de secours Cas 6 : 51N/295364460 → 165S/294909918 → 144N/295446235.
-    Représente le scénario « rate le premier 165, prend le suivant, arrive à 8h17 »."""
+    """Construit le trajet de secours Cas 6 : 51N/295364460 → 165S/294909918 → 144N/295446159.
+    Représente le scénario « rate le premier 165, prend le suivant — et arrive QUAND MÊME
+    à 7h55 car la marge avant le 144 absorbe les 6 min de retard du 165 ». C'est le récit de
+    robustesse que les cartes plates cachent : manquer le premier 165 ne coûte rien."""
     def find_g(stop_id, line_id):
         for i, s in enumerate(stops):
             if s["stop_id"] == stop_id and s["line_id"] == line_id:
@@ -319,7 +321,7 @@ def build_next165_fallback(stops, origin_pt, dest_pt):
     egress_dist = dist_m(s[5]["lat"], s[5]["lon"], dest_pt["lat"], dest_pt["lon"])
 
     return {
-        "arrival_s":     29849.0 + egress_dist / WALK_SPEED_MPS,
+        "arrival_s":     28529.0 + egress_dist / WALK_SPEED_MPS,
         "egress_stop":   g_52218,
         "egress_walk_s": egress_dist / WALK_SPEED_MPS,
         "egress_dist":   egress_dist,
@@ -344,9 +346,9 @@ def build_next165_fallback(stops, origin_pt, dest_pt):
                 "n_stops": 9,
             },
             {
-                "line_id": "144N", "base": "144", "trip_id": "295446235",
-                "board_stop": g_51896, "board_s": 29424.0,
-                "alight_stop": g_52218, "alight_s": 29849.0,
+                "line_id": "144N", "base": "144", "trip_id": "295446159",
+                "board_stop": g_51896, "board_s": 28104.0,
+                "alight_stop": g_52218, "alight_s": 28529.0,
                 "from_walk_stop": g_51841, "from_walk_s": walk_s_12,
                 "n_stops": 10,
             },

@@ -48,7 +48,6 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
     let mode        = 'biseau';   // 'legend' | 'biseau' | 'bandes'
     let orderMethod = 'best';     // 'best' | 'mean'
-    let bandShape   = 'enveloppe';// 'enveloppe' | 'retard'
     let pinned      = false;
     let collapsed   = false;
     let selectedIdx = null;      // null = tous, number = trajet sélectionné
@@ -373,10 +372,6 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
                 [['best', 'Meilleure arr.'], ['mean', 'Arr. moy.']],
                 orderMethod, 'Ordre des groupes (gauche → droite)',
                 v => { orderMethod = v; drawBandes(); }),
-            mkSelect(
-                [['enveloppe', 'Enveloppe'], ['retard', 'Symétrique p90']],
-                bandShape, 'Forme des pointes : enveloppe (pointe départ = p10) ou symétrique (pointe départ = p90)',
-                v => { bandShape = v; drawBandes(); }),
         );
         contentDiv.appendChild(bar);
 
@@ -478,21 +473,13 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const sgA = eventSigmas(alightS, leg.trip_id, nowAbs);
             const col = hex(LINE_COLORS[leg.line_id] ?? 0x888888);
 
-            // Hexagone pointu en haut et en bas.
-            // Arrivée (haut) : pointe = p90 (pire cas, bus retardé), épaulements = p10.
+            // Hexagone symétrique : p90 à la pointe (haut et bas), p10 aux épaules.
+            // Arrivée (haut) : pointe haute = p90 (pire cas), épaules = p10.
+            // Départ  (bas)  : p90 au centre (notch vers le haut), p10 aux coins bas.
             const yTopApex = btY(alightS + sgA.late);   // pointe haute = p90 arrivée
-            const yTopBody = btY(alightS - sgA.early);  // épaulements = p10 arrivée
-            // Départ (bas) : deux formes au choix.
-            //  'enveloppe' : pointe basse = p10 (avance) → silhouette = enveloppe temporelle complète.
-            //  'retard'    : p90 au centre, p10 aux coins gauche/droite → symétrique avec l'arrivée.
-            let yBotApex, yBotBody;
-            if (bandShape === 'retard') {
-                yBotApex = btY(boardS + sgB.late);    // p90 au centre (pointe vers le haut)
-                yBotBody = btY(boardS - sgB.early);   // p10 aux pointes gauche/droite
-            } else {
-                yBotApex = btY(boardS - sgB.early);   // p10 au centre (pointe vers le bas)
-                yBotBody = btY(boardS + sgB.late);    // p90 aux épaulements
-            }
+            const yTopBody = btY(alightS - sgA.early);  // épaules haut = p10 arrivée
+            const yBotApex = btY(boardS  + sgB.late);   // notch centre = p90 départ
+            const yBotBody = btY(boardS  - sgB.early);  // coins bas = p10 départ
 
             c.fillStyle = col;
             c.beginPath();
@@ -529,6 +516,45 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         });
 
         c.restore();
+
+        // ── Zones de risque de correspondance ─────────────────────────────────
+        // Pour chaque paire de bus consécutifs, la zone de risque est l'intervalle
+        // où l'incertitude de fin du bus A chevauche celle du début du bus B.
+        // tRiskLo = max(alightA, boardB − σB_early)
+        // tRiskHi = min(alightA + σA_late, boardB)
+        // Si la zone est non vide, la correspondance est à risque.
+        // La zone rétrécit à mesure que σ diminue avec le temps.
+        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(Date.now() / 500));
+        for (let bi = 0; bi < busLegs.length - 1; bi++) {
+            const legA    = busLegs[bi];
+            const legB    = busLegs[bi + 1];
+            const alightA = legA.alight_s ?? legA.arrive_s;
+            const boardB  = legB.board_s  ?? legB.depart_s;
+            const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
+            const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
+
+            const tRiskLo = Math.max(alightA, boardB - sgB.early);
+            const tRiskHi = Math.min(alightA + sgA.late, boardB);
+            if (tRiskLo >= tRiskHi) continue;   // aucun risque
+
+            const yHi = btY(tRiskHi);   // temps plus tardif → plus haut (Y plus petit)
+            const yLo = btY(tRiskLo);   // temps plus tôt  → plus bas  (Y plus grand)
+
+            c.save();
+            c.globalAlpha = (dim ? 0.4 : 1.0) * pulse;
+            c.fillStyle = '#ff2020';
+            c.fillRect(xCenter - halfW, yHi, halfW * 2, yLo - yHi);
+            // Bordures horizontales nettes aux limites de la zone
+            c.globalAlpha = (dim ? 0.5 : 1.0) * Math.min(pulse + 0.2, 1);
+            c.strokeStyle = '#ff5555';
+            c.lineWidth = 1;
+            c.setLineDash([]);
+            c.beginPath();
+            c.moveTo(xCenter - halfW, yHi); c.lineTo(xCenter + halfW, yHi);
+            c.moveTo(xCenter - halfW, yLo); c.lineTo(xCenter + halfW, yLo);
+            c.stroke();
+            c.restore();
+        }
     }
 
     // ── Utilitaires ───────────────────────────────────────────────────────────

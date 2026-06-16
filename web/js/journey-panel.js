@@ -462,7 +462,19 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         const busLegs = jr.legs.filter(l => l.type === 'bus');
         const dim   = selectedIdx !== null && selectedIdx !== idx;
         const alpha = dim ? 0.18 : 1.0;
+        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(Date.now() / 500));
 
+        // Pré-calculer le risque pour chaque transfert
+        const risks = busLegs.slice(0, -1).map((legA, bi) => {
+            const legB    = busLegs[bi + 1];
+            const alightA = legA.alight_s ?? legA.arrive_s;
+            const boardB  = legB.board_s  ?? legB.depart_s;
+            const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
+            const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
+            return { risky: alightA + sgA.late > boardB - sgB.early, alightA, boardB, sgA, sgB };
+        });
+
+        // Phase 1 : hexagones + connecteurs
         c.save();
         c.globalAlpha = alpha;
 
@@ -500,16 +512,17 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
                 c.fillText(leg.base, xCenter, yMid50 + 3);
             }
 
-            // Trait de connexion vers le bus suivant (p50 alight → p50 board suivant)
+            // Connecteur vers le bus suivant : rouge si transfert risqué
             if (bi < busLegs.length - 1) {
-                const nextLeg    = busLegs[bi + 1];
-                const nextBoardS = nextLeg.board_s ?? nextLeg.depart_s;
+                const { risky, alightA, boardB } = risks[bi];
                 c.save();
-                c.strokeStyle = '#aabbcc'; c.lineWidth = 1; c.globalAlpha *= 0.5;
+                c.strokeStyle = risky ? '#ff4040' : '#aabbcc';
+                c.lineWidth   = risky ? 1.5 : 1;
+                c.globalAlpha *= risky ? 0.85 : 0.5;
                 c.setLineDash([2, 3]);
                 c.beginPath();
-                c.moveTo(xCenter, btY(alightS));
-                c.lineTo(xCenter, btY(nextBoardS));
+                c.moveTo(xCenter, btY(alightA));
+                c.lineTo(xCenter, btY(boardB));
                 c.stroke();
                 c.restore();
             }
@@ -517,46 +530,33 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
         c.restore();
 
-        // ── Zones de risque de correspondance ─────────────────────────────────
-        // Pour chaque paire de bus consécutifs, la zone de risque est l'intervalle
-        // de temps où l'incertitude d'arrivée du bus A chevauche celle de départ
-        // du bus B — c.-à-d. la région où les deux bandes s'interpénètrent.
-        //   zone = [arrivéeA ∓ σ] ∩ [départB ∓ σ]
-        //        = [ max(alightA − σA_early, boardB − σB_early),
-        //            min(alightA + σA_late,  boardB + σB_late) ]
-        // Bornes utiles : haut = pointe p90 d'arrivée de A ; bas = notch p10 de
-        // départ de B. La zone rétrécit quand σ diminue et disparaît sans risque.
-        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(Date.now() / 500));
-        for (let bi = 0; bi < busLegs.length - 1; bi++) {
-            const legA    = busLegs[bi];
-            const legB    = busLegs[bi + 1];
-            const alightA = legA.alight_s ?? legA.arrive_s;
-            const boardB  = legB.board_s  ?? legB.depart_s;
-            const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
-            const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
-
-            const tRiskLo = Math.max(alightA - sgA.early, boardB - sgB.early);
-            const tRiskHi = Math.min(alightA + sgA.late,  boardB + sgB.late);
-            if (tRiskLo >= tRiskHi) continue;   // aucun chevauchement → aucun risque
-
-            const yHi = btY(tRiskHi);   // temps plus tardif → plus haut (Y plus petit)
-            const yLo = btY(tRiskLo);   // temps plus tôt  → plus bas  (Y plus grand)
+        // Phase 2 : overlays de risque — deux zones séparées, dans les limites de chaque bande.
+        // Zone A : pointe haute de la bande A  → [p50 arrivée A, p90 arrivée A]
+        // Zone B : coins bas de la bande B     → [p10 départ B, p50 départ B]
+        // Connecteur rouge (dessiné en phase 1) relie les deux visuellement.
+        risks.forEach(({ risky, alightA, boardB, sgA, sgB }) => {
+            if (!risky) return;
+            const rAlpha = (dim ? 0.35 : 1.0) * pulse;
 
             c.save();
-            c.globalAlpha = (dim ? 0.4 : 1.0) * pulse;
             c.fillStyle = '#ff2020';
-            c.fillRect(xCenter - halfW, yHi, halfW * 2, yLo - yHi);
-            // Bordures horizontales nettes aux limites de la zone
-            c.globalAlpha = (dim ? 0.5 : 1.0) * Math.min(pulse + 0.2, 1);
-            c.strokeStyle = '#ff5555';
-            c.lineWidth = 1;
-            c.setLineDash([]);
-            c.beginPath();
-            c.moveTo(xCenter - halfW, yHi); c.lineTo(xCenter + halfW, yHi);
-            c.moveTo(xCenter - halfW, yLo); c.lineTo(xCenter + halfW, yLo);
-            c.stroke();
+
+            // Pointe haute de bus A (retard d'arrivée plausible)
+            if (sgA.late > 0) {
+                c.globalAlpha = rAlpha;
+                c.fillRect(xCenter - halfW, btY(alightA + sgA.late),
+                           halfW * 2,       btY(alightA) - btY(alightA + sgA.late));
+            }
+
+            // Coins bas de bus B (avance au départ plausible)
+            if (sgB.early > 0) {
+                c.globalAlpha = rAlpha;
+                c.fillRect(xCenter - halfW, btY(boardB),
+                           halfW * 2,       btY(boardB - sgB.early) - btY(boardB));
+            }
+
             c.restore();
-        }
+        });
     }
 
     // ── Utilitaires ───────────────────────────────────────────────────────────

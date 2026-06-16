@@ -519,11 +519,13 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
         // ── Zones de risque de correspondance ─────────────────────────────────
         // Pour chaque paire de bus consécutifs, la zone de risque est l'intervalle
-        // où l'incertitude de fin du bus A chevauche celle du début du bus B.
-        // tRiskLo = max(alightA, boardB − σB_early)
-        // tRiskHi = min(alightA + σA_late, boardB)
-        // Si la zone est non vide, la correspondance est à risque.
-        // La zone rétrécit à mesure que σ diminue avec le temps.
+        // de temps où l'incertitude d'arrivée du bus A chevauche celle de départ
+        // du bus B — c.-à-d. la région où les deux bandes s'interpénètrent.
+        //   zone = [arrivéeA ∓ σ] ∩ [départB ∓ σ]
+        //        = [ max(alightA − σA_early, boardB − σB_early),
+        //            min(alightA + σA_late,  boardB + σB_late) ]
+        // Bornes utiles : haut = pointe p90 d'arrivée de A ; bas = notch p10 de
+        // départ de B. La zone rétrécit quand σ diminue et disparaît sans risque.
         const pulse = 0.35 + 0.2 * Math.abs(Math.sin(Date.now() / 500));
         for (let bi = 0; bi < busLegs.length - 1; bi++) {
             const legA    = busLegs[bi];
@@ -533,9 +535,9 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
             const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
 
-            const tRiskLo = Math.max(alightA, boardB - sgB.early);
-            const tRiskHi = Math.min(alightA + sgA.late, boardB);
-            if (tRiskLo >= tRiskHi) continue;   // aucun risque
+            const tRiskLo = Math.max(alightA - sgA.early, boardB - sgB.early);
+            const tRiskHi = Math.min(alightA + sgA.late,  boardB + sgB.late);
+            if (tRiskLo >= tRiskHi) continue;   // aucun chevauchement → aucun risque
 
             const yHi = btY(tRiskHi);   // temps plus tardif → plus haut (Y plus petit)
             const yLo = btY(tRiskLo);   // temps plus tôt  → plus bas  (Y plus grand)

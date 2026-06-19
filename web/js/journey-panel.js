@@ -518,10 +518,9 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
         c.restore();
 
-        // Phase 2 : un seul rectangle de risque par transfert.
-        // Zone = intersection des deux nuages d'incertitude (arrivée A ∩ départ B).
-        // Sa hauteur = durée de chevauchement réelle : mince si le risque est
-        // marginal, et nulle (donc rien dessiné) quand il n'y a plus de risque.
+        // Phase 2 : pour chaque transfert risqué, fantôme de la pointe de A
+        // au-dessus de la bande B (triangle p50→p90 en couleur A, semi-transparent)
+        // et rectangle de risque couvrant [boardB−σ, alightA+σ].
         const pulse = 0.4 + 0.25 * Math.abs(Math.sin(Date.now() / 500));
         for (let bi = 0; bi < busLegs.length - 1; bi++) {
             const legA    = busLegs[bi];
@@ -531,18 +530,35 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
             const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
 
-            const tLo = Math.max(alightA - sgA.early, boardB - sgB.early);
-            const tHi = Math.min(alightA + sgA.late,  boardB + sgB.late);
-            if (tLo >= tHi) continue;   // aucun chevauchement → aucun risque
+            const tLo = boardB - sgB.early;   // départ le plus tôt possible de B
+            const tHi = alightA + sgA.late;   // arrivée la plus tardive possible de A
+            if (tLo >= tHi) continue;         // aucun chevauchement → aucun risque
 
-            const yTop = btY(tHi);   // temps plus tardif → plus haut (Y plus petit)
-            const yBot = btY(tLo);
+            // a) Fantôme de la pointe haute de A (la partie cachée sous B)
+            //    Triangle p50 → p90 dessiné en couleur de A, alpha faible.
+            const colA   = hex(LINE_COLORS[legA.line_id] ?? 0x888888);
+            const yApex  = btY(alightA + sgA.late);  // pointe p90
+            const yMid50 = btY(alightA);              // niveau des épaules p50
 
             c.save();
-            c.globalAlpha = (dim ? 0.4 : 1.0) * pulse;
+            c.globalAlpha = dim ? 0.07 : 0.22;
+            c.fillStyle = colA;
+            c.beginPath();
+            c.moveTo(xCenter,          yApex);
+            c.lineTo(xCenter + halfW,  yMid50);
+            c.lineTo(xCenter - halfW,  yMid50);
+            c.closePath();
+            c.fill();
+            c.restore();
+
+            // b) Rectangle de risque sur la zone de chevauchement complète
+            const yTop = btY(tHi);
+            const yBot = btY(tLo);
+            c.save();
+            c.globalAlpha = (dim ? 0.35 : 1.0) * pulse;
             c.fillStyle   = '#ff2020';
             c.fillRect(xCenter - halfW, yTop, halfW * 2, yBot - yTop);
-            c.globalAlpha = (dim ? 0.5 : 1.0) * Math.min(pulse + 0.25, 1);
+            c.globalAlpha = (dim ? 0.45 : 1.0) * Math.min(pulse + 0.25, 1);
             c.strokeStyle = '#ff6060';
             c.lineWidth   = 1;
             c.setLineDash([]);

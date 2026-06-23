@@ -32,7 +32,21 @@ const B_T_END     = 30120;   // 8h22 — marge au-dessus de 29857
 const B_GRP_GAP   = 10;      // espace horizontal entre groupes
 const B_BAND_HALF_MAX = 12;  // demi-largeur max d'une bande (bandes étroites)
 
+// ── Section "probabilité d'arrivée" (mode biseau) ─────────────────────────
+const CDF_W    = 155;   // largeur totale de la section CDF
+const CDF_LPAD =   6;   // marge gauche dans la section
+const CDF_TPAD =  22;   // espace réservé pour les étiquettes en haut
+const CDF_BPAD =   8;   // marge basse
+
 function hex(n) { return '#' + n.toString(16).padStart(6, '0'); }
+
+// Approximation de la CDF normale standard Φ(x) (précision ~1e-5)
+function normalCDF(x) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const d = 0.3989423 * Math.exp(-x * x / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.821256 + t * 1.3302744))));
+    return x > 0 ? 1 - p : p;
+}
 function fmtT(s) {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
@@ -46,7 +60,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     const tMin    = t0 - 60;
     const tMax    = Math.max(...journeysData.journeys.map(j => j.arrival_s)) + 360;
 
-    let mode        = 'biseau';   // 'legend' | 'biseau' | 'bandes'
+    let mode        = 'bandes';    // 'legend' | 'biseau' | 'bandes'
     let orderMethod = 'best';     // 'best' | 'mean'
     let pinned      = false;
     let collapsed   = false;
@@ -55,6 +69,8 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
     let cvs = null, ctx = null, contentDiv = null;
     let bandsCvs = null, bandsCtx = null;
+    let cdfMethod = 'linear'; // 'linear' | 'gauss'
+    let cdfCvs = null, cdfCtx = null;
     const N = journeysData.journeys.length;
     const canvasH = AXIS_H + N * ROW_H + 6;
 
@@ -82,7 +98,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     // ── Build HTML ────────────────────────────────────────────────────────────
     function build() {
         container.innerHTML = '';
-        container.style.width = PANEL_W + 'px';
+        container.style.width = (mode === 'biseau' ? PANEL_W + CDF_W : PANEL_W) + 'px';
 
         const hdr = document.createElement('div');
         hdr.style.cssText = 'display:flex; align-items:center; gap:5px; margin-bottom:5px;';
@@ -150,6 +166,9 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         contentDiv.innerHTML = '';
         cvs = null; ctx = null;
         bandsCvs = null; bandsCtx = null;
+        cdfCvs = null; cdfCtx = null;
+        // Largeur du conteneur selon le mode (biseau ajoute la section CDF)
+        container.style.width = (mode === 'biseau' ? PANEL_W + CDF_W : PANEL_W) + 'px';
         if (mode === 'legend') { renderLegend(); return; }
         if (mode === 'bandes') { renderBandesCanvas(); return; }
         renderTimelineCanvas();
@@ -189,6 +208,29 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
     // ── Canvas timeline (biseau) ──────────────────────────────────────────────
     function renderTimelineCanvas() {
+        // Barre de sous-options : méthode de probabilité de transfert
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex; gap:5px; align-items:center; margin-bottom:4px;';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = 'color:#778899; font-size:9px; font-family:monospace;';
+        lbl.textContent = 'P(transfert) :';
+        bar.append(lbl, mkSelect(
+            [['linear', 'Linéaire'], ['gauss', 'Gaussienne']],
+            cdfMethod, 'Méthode de calcul de la probabilité de transfert',
+            v => { cdfMethod = v; drawCdf(); }
+        ));
+        contentDiv.appendChild(bar);
+
+        // Conteneur flex: [section CDF | canvas biseau]
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display:flex; gap:0; align-items:flex-start;';
+
+        cdfCvs = document.createElement('canvas');
+        cdfCvs.width  = CDF_W;
+        cdfCvs.height = canvasH;
+        cdfCvs.style.cssText = `width:${CDF_W}px; height:${canvasH}px; display:block;`;
+        cdfCtx = cdfCvs.getContext('2d');
+
         cvs = document.createElement('canvas');
         cvs.width  = PANEL_W;
         cvs.height = canvasH;
@@ -200,8 +242,11 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const ri = Math.floor((y - AXIS_H) / ROW_H);
             if (ri >= 0 && ri < N) toggleSelect(ri);
         };
-        contentDiv.appendChild(cvs);
+
+        wrapper.append(cdfCvs, cvs);
+        contentDiv.appendChild(wrapper);
         draw();
+        drawCdf();
     }
 
     function draw() {
@@ -331,6 +376,168 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
             ctx.fillText(leg.base, midX, yMid + 3);
         }
+    }
+
+    // ── Section probabilité d'arrivée ─────────────────────────────────────────
+
+    // P(transfert réussi) entre legA (descente) et legB (montée)
+    function pTransferSuccess(legA, legB, nowAbs) {
+        const alightA = legA.alight_s ?? legA.arrive_s;
+        const boardB  = legB.board_s  ?? legB.depart_s;
+        const sgA = eventSigmas(alightA, legA.trip_id, nowAbs);
+        const sgB = eventSigmas(boardB,  legB.trip_id, nowAbs);
+        const margin = boardB - alightA;
+        const sigma  = sgA.late + sgB.early;
+        if (sigma <= 0) return margin > 0 ? 1 : 0;
+        if (cdfMethod === 'gauss') return normalCDF(margin / sigma);
+        // linéaire : P=0 quand margin=-sigma, P=1 quand margin=+sigma
+        return Math.max(0, Math.min(1, 0.5 + margin / (2 * sigma)));
+    }
+
+    // Produit des probabilités de transfert d'un trajet complet
+    function journeyTransferP(jr, nowAbs) {
+        const busLegs = jr.legs.filter(l => l.type === 'bus');
+        let p = 1;
+        for (let i = 0; i < busLegs.length - 1; i++) {
+            p *= pTransferSuccess(busLegs[i], busLegs[i + 1], nowAbs);
+        }
+        return p;
+    }
+
+    // Points (t, cumProb) de la CDF d'arrivée pour un groupe de trajets.
+    // Modèle : chaque trajet contribue rawP / totalP × CDF_linéaire(arr_p10..arr_p90).
+    function computeGroupCdfPts(journeys, nowAbs) {
+        const wjs = journeys.map(jr => {
+            const busLegs = jr.legs.filter(l => l.type === 'bus');
+            const lastLeg = busLegs[busLegs.length - 1];
+            const arrS = jr.arrival_s;
+            const sg   = eventSigmas(arrS, lastLeg.trip_id, nowAbs);
+            return { tLo: arrS - sg.early, tHi: arrS + sg.late, rawP: journeyTransferP(jr, nowAbs) };
+        });
+        const totalP = wjs.reduce((s, x) => s + x.rawP, 0);
+        if (totalP <= 0) return [];
+
+        // Grille temporelle fine couvrant toutes les fenêtres d'arrivée
+        const tMin_ = Math.min(...wjs.map(x => x.tLo));
+        const tMax_ = Math.max(...wjs.map(x => x.tHi));
+        const allT  = new Set();
+        for (let t = tMin_; t <= tMax_ + 1; t += 20) allT.add(t);
+        wjs.forEach(({ tLo, tHi }) => { allT.add(tLo); allT.add(tHi); });
+
+        return [...allT].sort((a, b) => a - b).map(t => {
+            let cumP = 0;
+            wjs.forEach(({ tLo, tHi, rawP }) => {
+                const w = rawP / totalP;
+                if (t >= tHi) cumP += w;
+                else if (t > tLo) cumP += w * (t - tLo) / (tHi - tLo);
+            });
+            return { t, cumP };
+        });
+    }
+
+    function drawCdf() {
+        if (!cdfCtx) return;
+        const c      = cdfCtx;
+        const nowAbs = t0 + simTime;
+        c.clearRect(0, 0, CDF_W, canvasH);
+
+        // Fond
+        c.fillStyle = '#111b27';
+        c.fillRect(0, 0, CDF_W, canvasH);
+
+        // Plage d'arrivée dynamique
+        const arrTimes = journeysData.journeys.map(j => j.arrival_s);
+        const tArrMin  = Math.min(...arrTimes) - 900;
+        const tArrMax  = Math.max(...arrTimes) + 900;
+        const drawH    = canvasH - CDF_TPAD - CDF_BPAD;
+
+        function cY(t) {
+            return CDF_TPAD + (1 - (t - tArrMin) / (tArrMax - tArrMin)) * drawH;
+        }
+
+        // Grille et étiquettes de temps (toutes les 5 min)
+        const firstTick = Math.ceil(tArrMin / 300) * 300;
+        c.font = '8px monospace'; c.textAlign = 'right';
+        for (let t = firstTick; t <= tArrMax; t += 300) {
+            const y = cY(t);
+            c.fillStyle = '#1b2a3a';
+            c.fillRect(CDF_LPAD, y, CDF_W - CDF_LPAD, 1);
+            c.fillStyle = '#445566';
+            c.fillText(fmtT(t), CDF_LPAD + 30, y + 3);
+        }
+
+        // Titre de la section
+        c.fillStyle = '#556677'; c.font = 'bold 8px monospace'; c.textAlign = 'center';
+        c.fillText("prob. d'arrivée", CDF_W / 2, 11);
+
+        // Curseur "maintenant" (axe arrivée, indicatif)
+        const yNow = cY(nowAbs);
+        if (yNow >= CDF_TPAD && yNow <= canvasH - CDF_BPAD) {
+            c.save();
+            c.strokeStyle = '#ffee55'; c.lineWidth = 1; c.globalAlpha = 0.45;
+            c.setLineDash([3, 3]);
+            c.beginPath(); c.moveTo(CDF_LPAD, yNow); c.lineTo(CDF_W, yNow); c.stroke();
+            c.restore();
+        }
+
+        // Une colonne CDF par groupe de premier bus
+        const groups  = groupJourneys();
+        const nGroups = groups.length;
+        const colW    = Math.floor((CDF_W - CDF_LPAD) / Math.max(1, nGroups));
+
+        groups.forEach((g, gi) => {
+            const xBase   = CDF_LPAD + gi * colW;
+            const maxBarW = colW - 5;
+            const journeys = g.items.map(x => x.jr);
+            const pts      = computeGroupCdfPts(journeys, nowAbs);
+            if (pts.length < 2) return;
+
+            const gCol = hex(LINE_COLORS[g.key] ?? 0x888888);
+
+            // Séparateur entre colonnes
+            if (gi > 0) {
+                c.fillStyle = '#1e2d3e';
+                c.fillRect(xBase - 1, CDF_TPAD, 1, drawH);
+            }
+
+            // Aire remplie (polygone fermé : bord gauche ↑, courbe CDF ↓)
+            c.save();
+            c.beginPath();
+            c.moveTo(xBase, cY(pts[0].t));
+            c.lineTo(xBase, cY(pts[pts.length - 1].t));
+            for (let i = pts.length - 1; i >= 0; i--) {
+                c.lineTo(xBase + pts[i].cumP * maxBarW, cY(pts[i].t));
+            }
+            c.closePath();
+            c.fillStyle = gCol; c.globalAlpha = 0.18;
+            c.fill();
+
+            // Contour de la courbe CDF
+            c.beginPath();
+            pts.forEach(({ t, cumP }, i) => {
+                const x = xBase + cumP * maxBarW;
+                const y = cY(t);
+                if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+            });
+            c.globalAlpha = 0.9; c.strokeStyle = gCol; c.lineWidth = 1.5;
+            c.stroke();
+            c.restore();
+
+            // Étiquette du groupe (couleur du 1er bus)
+            c.fillStyle = gCol; c.font = 'bold 8px monospace'; c.textAlign = 'center';
+            c.fillText(g.key, xBase + colW / 2, 20);
+
+            // Tiret horizontal à P=0.5
+            const p50 = pts.find(p => p.cumP >= 0.5);
+            if (p50) {
+                const y50 = cY(p50.t);
+                c.save();
+                c.strokeStyle = gCol; c.lineWidth = 0.5; c.globalAlpha = 0.4;
+                c.setLineDash([2, 3]);
+                c.beginPath(); c.moveTo(xBase, y50); c.lineTo(xBase + maxBarW, y50); c.stroke();
+                c.restore();
+            }
+        });
     }
 
     // ── Bandes ────────────────────────────────────────────────────────────────
@@ -611,6 +818,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         update(st) {
             simTime = st;
             if (mode === 'bandes' && bandsCtx) { drawBandes(); return; }
+            if (mode === 'biseau' && ctx) { draw(); drawCdf(); return; }
             if (mode !== 'legend' && ctx) draw();
         },
         dispose() {

@@ -391,12 +391,15 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         const totalP = wjs.reduce((s, x) => s + x.rawP, 0);
         if (totalP <= 0) return [];
 
-        // Grille temporelle fine couvrant toutes les fenêtres d'arrivée
-        const tMin_ = Math.min(...wjs.map(x => x.tLo));
-        const tMax_ = Math.max(...wjs.map(x => x.tHi));
+        // Grille temporelle — couvre toute la hauteur du canvas bandes (7h00→8h22)
+        // plus les fenêtres exactes p10/p90 de chaque trajet.
         const allT  = new Set();
-        for (let t = tMin_; t <= tMax_ + 1; t += 20) allT.add(t);
-        wjs.forEach(({ tLo, tHi }) => { allT.add(tLo); allT.add(tHi); });
+        allT.add(B_T0);    // borne basse : plateau à 0 %
+        allT.add(B_T_END); // borne haute : plateau à 100 %
+        wjs.forEach(({ tLo, tHi }) => {
+            allT.add(tLo); allT.add(tHi);
+            for (let t = tLo; t <= tHi; t += 20) allT.add(t);
+        });
 
         return [...allT].sort((a, b) => a - b).map(t => {
             let cumP = 0;

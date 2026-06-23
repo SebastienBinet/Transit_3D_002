@@ -98,7 +98,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     // ── Build HTML ────────────────────────────────────────────────────────────
     function build() {
         container.innerHTML = '';
-        container.style.width = (mode === 'biseau' ? PANEL_W + CDF_W : PANEL_W) + 'px';
+        container.style.width = (mode === 'bandes' ? PANEL_W + CDF_W : PANEL_W) + 'px';
 
         const hdr = document.createElement('div');
         hdr.style.cssText = 'display:flex; align-items:center; gap:5px; margin-bottom:5px;';
@@ -167,8 +167,8 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         cvs = null; ctx = null;
         bandsCvs = null; bandsCtx = null;
         cdfCvs = null; cdfCtx = null;
-        // Largeur du conteneur selon le mode (biseau ajoute la section CDF)
-        container.style.width = (mode === 'biseau' ? PANEL_W + CDF_W : PANEL_W) + 'px';
+        // Largeur du conteneur selon le mode (bandes ajoute la section CDF)
+        container.style.width = (mode === 'bandes' ? PANEL_W + CDF_W : PANEL_W) + 'px';
         if (mode === 'legend') { renderLegend(); return; }
         if (mode === 'bandes') { renderBandesCanvas(); return; }
         renderTimelineCanvas();
@@ -208,29 +208,6 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
     // ── Canvas timeline (biseau) ──────────────────────────────────────────────
     function renderTimelineCanvas() {
-        // Barre de sous-options : méthode de probabilité de transfert
-        const bar = document.createElement('div');
-        bar.style.cssText = 'display:flex; gap:5px; align-items:center; margin-bottom:4px;';
-        const lbl = document.createElement('span');
-        lbl.style.cssText = 'color:#778899; font-size:9px; font-family:monospace;';
-        lbl.textContent = 'P(transfert) :';
-        bar.append(lbl, mkSelect(
-            [['linear', 'Linéaire'], ['gauss', 'Gaussienne']],
-            cdfMethod, 'Méthode de calcul de la probabilité de transfert',
-            v => { cdfMethod = v; drawCdf(); }
-        ));
-        contentDiv.appendChild(bar);
-
-        // Conteneur flex: [section CDF | canvas biseau]
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display:flex; gap:0; align-items:flex-start;';
-
-        cdfCvs = document.createElement('canvas');
-        cdfCvs.width  = CDF_W;
-        cdfCvs.height = canvasH;
-        cdfCvs.style.cssText = `width:${CDF_W}px; height:${canvasH}px; display:block;`;
-        cdfCtx = cdfCvs.getContext('2d');
-
         cvs = document.createElement('canvas');
         cvs.width  = PANEL_W;
         cvs.height = canvasH;
@@ -242,11 +219,8 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const ri = Math.floor((y - AXIS_H) / ROW_H);
             if (ri >= 0 && ri < N) toggleSelect(ri);
         };
-
-        wrapper.append(cdfCvs, cvs);
-        contentDiv.appendChild(wrapper);
+        contentDiv.appendChild(cvs);
         draw();
-        drawCdf();
     }
 
     function draw() {
@@ -439,40 +413,31 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
         if (!cdfCtx) return;
         const c      = cdfCtx;
         const nowAbs = t0 + simTime;
-        c.clearRect(0, 0, CDF_W, canvasH);
+        c.clearRect(0, 0, CDF_W, BANDES_H);
 
-        // Fond
-        c.fillStyle = '#111b27';
-        c.fillRect(0, 0, CDF_W, canvasH);
+        // Fond identique au fond du canvas bandes
+        c.fillStyle = '#0d1824';
+        c.fillRect(0, 0, CDF_W, BANDES_H);
 
-        // Plage d'arrivée dynamique
-        const arrTimes = journeysData.journeys.map(j => j.arrival_s);
-        const tArrMin  = Math.min(...arrTimes) - 900;
-        const tArrMax  = Math.max(...arrTimes) + 900;
-        const drawH    = canvasH - CDF_TPAD - CDF_BPAD;
-
-        function cY(t) {
-            return CDF_TPAD + (1 - (t - tArrMin) / (tArrMax - tArrMin)) * drawH;
-        }
-
-        // Grille et étiquettes de temps (toutes les 5 min)
-        const firstTick = Math.ceil(tArrMin / 300) * 300;
+        // L'axe Y est partagé avec btY() — même plage temporelle que les bandes.
+        // Grille horizontale alignée sur les 15 min (identique aux bandes)
         c.font = '8px monospace'; c.textAlign = 'right';
-        for (let t = firstTick; t <= tArrMax; t += 300) {
-            const y = cY(t);
+        const firstTick = Math.ceil(B_T0 / 900) * 900;
+        for (let t = firstTick; t <= B_T_END; t += 900) {
+            const y = btY(t);
             c.fillStyle = '#1b2a3a';
             c.fillRect(CDF_LPAD, y, CDF_W - CDF_LPAD, 1);
             c.fillStyle = '#445566';
-            c.fillText(fmtT(t), CDF_LPAD + 30, y + 3);
+            c.fillText(fmtT(t), CDF_LPAD + 32, y + 3);
         }
 
         // Titre de la section
         c.fillStyle = '#556677'; c.font = 'bold 8px monospace'; c.textAlign = 'center';
-        c.fillText("prob. d'arrivée", CDF_W / 2, 11);
+        c.fillText("prob. d'arrivée", CDF_W / 2, 12);
 
-        // Curseur "maintenant" (axe arrivée, indicatif)
-        const yNow = cY(nowAbs);
-        if (yNow >= CDF_TPAD && yNow <= canvasH - CDF_BPAD) {
+        // Curseur "maintenant"
+        const yNow = btY(nowAbs);
+        if (yNow >= B_TOP_PAD && yNow <= B_TOP_PAD + B_DRAW_H) {
             c.save();
             c.strokeStyle = '#ffee55'; c.lineWidth = 1; c.globalAlpha = 0.45;
             c.setLineDash([3, 3]);
@@ -497,16 +462,17 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             // Séparateur entre colonnes
             if (gi > 0) {
                 c.fillStyle = '#1e2d3e';
-                c.fillRect(xBase - 1, CDF_TPAD, 1, drawH);
+                c.fillRect(xBase - 1, B_TOP_PAD, 1, B_DRAW_H);
             }
 
-            // Aire remplie (polygone fermé : bord gauche ↑, courbe CDF ↓)
+            // Aire remplie — polygone : bord gauche ↑ (vers haut = temps tardif),
+            // puis courbe CDF ↓ (vers bas = temps précoce)
             c.save();
             c.beginPath();
-            c.moveTo(xBase, cY(pts[0].t));
-            c.lineTo(xBase, cY(pts[pts.length - 1].t));
+            c.moveTo(xBase, btY(pts[0].t));
+            c.lineTo(xBase, btY(pts[pts.length - 1].t));
             for (let i = pts.length - 1; i >= 0; i--) {
-                c.lineTo(xBase + pts[i].cumP * maxBarW, cY(pts[i].t));
+                c.lineTo(xBase + pts[i].cumP * maxBarW, btY(pts[i].t));
             }
             c.closePath();
             c.fillStyle = gCol; c.globalAlpha = 0.18;
@@ -516,7 +482,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             c.beginPath();
             pts.forEach(({ t, cumP }, i) => {
                 const x = xBase + cumP * maxBarW;
-                const y = cY(t);
+                const y = btY(t);
                 if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
             });
             c.globalAlpha = 0.9; c.strokeStyle = gCol; c.lineWidth = 1.5;
@@ -525,12 +491,12 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
 
             // Étiquette du groupe (couleur du 1er bus)
             c.fillStyle = gCol; c.font = 'bold 8px monospace'; c.textAlign = 'center';
-            c.fillText(g.key, xBase + colW / 2, 20);
+            c.fillText(g.key, xBase + colW / 2, 21);
 
             // Tiret horizontal à P=0.5
             const p50 = pts.find(p => p.cumP >= 0.5);
             if (p50) {
-                const y50 = cY(p50.t);
+                const y50 = btY(p50.t);
                 c.save();
                 c.strokeStyle = gCol; c.lineWidth = 0.5; c.globalAlpha = 0.4;
                 c.setLineDash([2, 3]);
@@ -571,16 +537,32 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     }
 
     function renderBandesCanvas() {
-        // Barre de sous-options propre aux bandes
+        // Barre de sous-options : ordre des groupes + méthode de calcul des transferts
         const bar = document.createElement('div');
-        bar.style.cssText = 'display:flex; gap:5px; margin-bottom:4px;';
+        bar.style.cssText = 'display:flex; gap:5px; align-items:center; margin-bottom:4px;';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = 'color:#778899; font-size:9px; font-family:monospace;';
+        lbl.textContent = 'P(transf.) :';
         bar.append(
-            mkSelect(
-                [['best', 'Meilleure arr.'], ['mean', 'Arr. moy.']],
+            mkSelect([['best', 'Meilleure arr.'], ['mean', 'Arr. moy.']],
                 orderMethod, 'Ordre des groupes (gauche → droite)',
-                v => { orderMethod = v; drawBandes(); }),
+                v => { orderMethod = v; drawBandes(); drawCdf(); }),
+            lbl,
+            mkSelect([['linear', 'Linéaire'], ['gauss', 'Gaussienne']],
+                cdfMethod, 'Méthode de calcul de la probabilité de transfert',
+                v => { cdfMethod = v; drawCdf(); }),
         );
         contentDiv.appendChild(bar);
+
+        // Conteneur flex : [section CDF | canvas bandes]
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display:flex; gap:0; align-items:flex-start;';
+
+        cdfCvs = document.createElement('canvas');
+        cdfCvs.width  = CDF_W;
+        cdfCvs.height = BANDES_H;
+        cdfCvs.style.cssText = `width:${CDF_W}px; height:${BANDES_H}px; display:block;`;
+        cdfCtx = cdfCvs.getContext('2d');
 
         bandsCvs = document.createElement('canvas');
         bandsCvs.width  = PANEL_W;
@@ -601,8 +583,11 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
                 xCursor += g.items.length * bandW + B_GRP_GAP;
             }
         };
-        contentDiv.appendChild(bandsCvs);
+
+        wrapper.append(cdfCvs, bandsCvs);
+        contentDiv.appendChild(wrapper);
         drawBandes();
+        drawCdf();
     }
 
     function drawBandes() {
@@ -817,8 +802,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
     return {
         update(st) {
             simTime = st;
-            if (mode === 'bandes' && bandsCtx) { drawBandes(); return; }
-            if (mode === 'biseau' && ctx) { draw(); drawCdf(); return; }
+            if (mode === 'bandes' && bandsCtx) { drawBandes(); drawCdf(); return; }
             if (mode !== 'legend' && ctx) draw();
         },
         dispose() {

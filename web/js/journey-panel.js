@@ -53,6 +53,18 @@ function fmtT(s) {
     return `${h}h${String(m).padStart(2, '0')}`;
 }
 
+// Texte avec contour foncé (lisible par-dessus n'importe quelle couleur de bande).
+// La police et l'alignement courants du contexte sont conservés.
+function strokeLabel(ctx, text, x, y, fill, lw = 3) {
+    ctx.save();
+    ctx.lineWidth = lw; ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = fill;
+    ctx.fillText(text, x, y);
+    ctx.restore();
+}
+
 export function createJourneyPanel({ container, journeysData, tripStarts = {}, onJourneySelect }) {
     const sigmaFn    = makeSigma({ kind: 'power', coeff_min: 3.0, exp: 0.301 });
     const reducedSig = makeReducedSigma(sigmaFn, REPORT_LAG_S);
@@ -389,19 +401,19 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             return { tLo: arrS - sg.early, tHi: arrS + sg.late, rawP: journeyTransferP(jr, nowAbs) };
         });
         const totalP = wjs.reduce((s, x) => s + x.rawP, 0);
-        if (totalP <= 0) return [];
+        if (totalP <= 0) return { pts: [], p90First: null };
 
-        // Grille temporelle — couvre toute la hauteur du canvas bandes (7h00→8h22)
-        // plus les fenêtres exactes p10/p90 de chaque trajet.
+        // Grille temporelle : plateau 0 % depuis 7h00 (B_T0), puis fenêtres exactes
+        // p10/p90 de chaque trajet. La courbe s'arrête au dernier p90 (pas de plateau
+        // 100 % au-dessus).
         const allT  = new Set();
         allT.add(B_T0);    // borne basse : plateau à 0 %
-        allT.add(B_T_END); // borne haute : plateau à 100 %
         wjs.forEach(({ tLo, tHi }) => {
             allT.add(tLo); allT.add(tHi);
             for (let t = tLo; t <= tHi; t += 20) allT.add(t);
         });
 
-        return [...allT].sort((a, b) => a - b).map(t => {
+        const pts = [...allT].sort((a, b) => a - b).map(t => {
             let cumP = 0;
             wjs.forEach(({ tLo, tHi, rawP }) => {
                 const w = rawP / totalP;
@@ -410,6 +422,10 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             });
             return { t, cumP };
         });
+
+        // p90 le plus tôt atteignable par ce circuit (certitude 90 % la plus hâtive)
+        const p90First = Math.min(...wjs.map(x => x.tHi));
+        return { pts, p90First };
     }
 
     function drawCdf() {
@@ -457,7 +473,7 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             const xBase   = CDF_LPAD + gi * colW;
             const maxBarW = colW - 5;
             const journeys = g.items.map(x => x.jr);
-            const pts      = computeGroupCdfPts(journeys, nowAbs);
+            const { pts, p90First } = computeGroupCdfPts(journeys, nowAbs);
             if (pts.length < 2) return;
 
             const gCol = hex(LINE_COLORS[g.key] ?? 0x888888);
@@ -504,6 +520,24 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
                 c.strokeStyle = gCol; c.lineWidth = 0.5; c.globalAlpha = 0.4;
                 c.setLineDash([2, 3]);
                 c.beginPath(); c.moveTo(xBase, y50); c.lineTo(xBase + maxBarW, y50); c.stroke();
+                c.restore();
+            }
+
+            // Marqueur « p90 le plus tôt » : heure de certitude à 90 % par ce circuit.
+            // Trait plein pleine largeur + heure sur fond foncé (option 3).
+            if (p90First != null && p90First <= B_T_END && p90First >= B_T0) {
+                const yMark = btY(p90First);
+                const label = fmtT(p90First);
+                c.save();
+                c.strokeStyle = gCol; c.lineWidth = 1.5; c.setLineDash([]);
+                c.beginPath(); c.moveTo(xBase, yMark); c.lineTo(xBase + maxBarW, yMark); c.stroke();
+                c.font = 'bold 8px monospace'; c.textAlign = 'center';
+                const cx = xBase + colW / 2;
+                const w  = c.measureText(label).width;
+                c.fillStyle = 'rgba(8,14,22,0.92)';
+                c.fillRect(cx - w / 2 - 2, yMark - 6, w + 4, 11);
+                c.fillStyle = gCol;
+                c.fillText(label, cx, yMark + 2.5);
                 c.restore();
             }
         });
@@ -691,9 +725,8 @@ export function createJourneyPanel({ container, journeysData, tripStarts = {}, o
             // Numéro de ligne au centre du corps (médiane p50→p50)
             const yMid50 = (btY(boardS) + btY(alightS)) / 2;
             if (btY(boardS) - btY(alightS) > 14) {
-                c.fillStyle = 'rgba(255,255,255,0.9)';
                 c.font = 'bold 8px monospace'; c.textAlign = 'center';
-                c.fillText(leg.base, xCenter, yMid50 + 3);
+                strokeLabel(c, leg.base, xCenter, yMid50 + 3, 'rgba(255,255,255,0.95)');
             }
 
             // Connecteur gris vers le bus suivant (p50 alight → p50 board suivant)

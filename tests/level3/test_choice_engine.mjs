@@ -15,7 +15,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { createChoiceEngine, computeChoiceCdf, makeEventSigmas, distM }
+import { createChoiceEngine, makeEventSigmas, distM }
     from '../../web/js/choice-engine.js';
 import { makeSigma } from '../../web/js/scenario-model.js';
 
@@ -139,7 +139,7 @@ test('invariants : temps des legs non décroissants, arrivée cohérente', () =>
 test('invariants : CDF croissante, bornée [0,1], p90First cohérent', () => {
     const eng = makeEngine();
     for (const c of eng.getChoices(T0)) {
-        const { pts, p90First } = computeChoiceCdf(c.journeys, T0, eng.evSig, T0);
+        const { pts, p90First } = eng.choiceCdf(c, T0, T0 - 900);
         assert.ok(pts.length >= 2);
         let prev = -1;
         for (const { t, cumP } of pts) {
@@ -147,41 +147,46 @@ test('invariants : CDF croissante, bornée [0,1], p90First cohérent', () => {
             assert.ok(cumP >= 0 && cumP <= 1 + 1e-9);
             prev = cumP;
         }
-        // p90First : soit null (plafond < 90 %, choix jamais sûr à 90 %),
-        // soit ≥ la meilleure arrivée p50.
         assert.ok(p90First === null || p90First >= c.bestArrivalS - 1,
             `p90First (${p90First}) < meilleure arrivée p50 (${c.bestArrivalS})`);
     }
 });
 
-// ── Régression : le risque de correspondance dégrade la CDF ─────────────────
-// Bug signalé : la CDF de la 51 montrait 90 % de certitude d'arrivée dès 8h02
-// alors que la correspondance 51→165 n'est attrapée qu'à ~64 %. La CDF ne doit
-// pas dépasser un plafond dicté par ce risque tant qu'aucun trajet aux
-// correspondances indépendantes ne comble la masse manquante.
-test('régression : la CDF de la 51 plafonne sous 90 % (risque 51→165)', () => {
+// ── Régression : la CDF grimpe jusqu'à ~100 % (modèle « prochain bus ») ──────
+// Bug signalé : les CDF plafonnaient sous 100 % (ex. 51 à 74 %) parce que seuls
+// les trajets rapides étaient comptés. En réalité, rater la correspondance
+// rapide ne fait que décaler au bus suivant → on finit par arriver. La CDF doit
+// grimper vers ~100 %, plus tard pour les choix risqués.
+test('régression : la CDF de chaque choix grimpe à ~100 %', () => {
     const eng = makeEngine();
-    const c51 = eng.getChoices(T0).find(c => c.lineId === '51N');
-    const { pts, p90First } = computeChoiceCdf(c51.journeys, T0, eng.evSig, T0 - 900);
-    const ceiling = Math.max(...pts.map(p => p.cumP));
-    // Tous les trajets de la 51 partagent la correspondance 51→165 (~64 %) :
-    // le plafond doit rester nettement sous 90 %.
-    assert.ok(ceiling < 0.9, `plafond CDF 51 = ${(ceiling*100).toFixed(0)} %, attendu < 90 %`);
-    // Donc aucun instant à 90 % dans l'horizon.
-    assert.equal(p90First, null, `p90First devrait être null, reçu ${p90First}`);
-    // CDF à 8h02 nettement sous l'ancien 93 %.
-    const at802 = pts.filter(p => p.t <= 8*3600 + 2*60).map(p => p.cumP).pop() ?? 0;
-    assert.ok(at802 < 0.85, `CDF(8h02) = ${(at802*100).toFixed(0)} %, attendu < 85 %`);
+    for (const c of eng.getChoices(T0)) {
+        const { pts } = eng.choiceCdf(c, T0, T0 - 900);
+        const ceiling = Math.max(...pts.map(p => p.cumP));
+        assert.ok(ceiling >= 0.95, `${c.lineId} : plafond ${(ceiling*100).toFixed(0)} %, attendu ≥ 95 %`);
+    }
 });
 
-test('contraste : un choix à correspondance fiable reste confiant', () => {
-    // La 66 → 144 a une grande marge de correspondance : sa CDF doit, elle,
-    // atteindre 90 % (plafond élevé) — le contraste que le bug masquait.
+// Le risque se lit désormais dans le TEMPS pour atteindre 90 % : un choix à
+// correspondance fiable et rapide (66) atteint 90 % bien avant un choix à deux
+// correspondances serrées (103).
+test('contraste : le choix fiable atteint 90 % avant le choix risqué', () => {
     const eng = makeEngine();
-    const c66 = eng.getChoices(T0).find(c => c.lineId === '66N');
-    const { pts } = computeChoiceCdf(c66.journeys, T0, eng.evSig, T0 - 900);
-    const ceiling = Math.max(...pts.map(p => p.cumP));
-    assert.ok(ceiling >= 0.9, `plafond CDF 66 = ${(ceiling*100).toFixed(0)} %, attendu ≥ 90 %`);
+    const p90 = lineId => eng.choiceCdf(
+        eng.getChoices(T0).find(c => c.lineId === lineId), T0, T0 - 900).p90First;
+    const p66 = p90('66N'), p103 = p90('103N');
+    assert.ok(p66 != null && p103 != null, `p90 manquant (66=${p66}, 103=${p103})`);
+    assert.ok(p103 > p66 + 300,
+        `p90(103)=${p103} devrait dépasser nettement p90(66)=${p66}`);
+});
+
+// Chaque feuille de l'arbre de repli porte une probabilité ≥ 0 et leur somme
+// ne dépasse pas 1 (masse perdue = tout rater, honnête).
+test('arbre de repli : distribution d\'arrivée bornée', () => {
+    const eng = makeEngine();
+    for (const c of eng.getChoices(T0)) {
+        const { pts } = eng.choiceCdf(c, T0, T0 - 900);
+        assert.ok(pts[pts.length - 1].cumP <= 1 + 1e-9);
+    }
 });
 
 test('il reste des choix tant que les horaires couvrent la période', () => {

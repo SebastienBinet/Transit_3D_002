@@ -61,44 +61,94 @@ export function pTransferSuccess(legA, legB, nowAbs, evSig) {
     return Math.max(0, Math.min(1, 0.5 + margin / (2 * sigma)));
 }
 
-function journeyTransferP(jr, nowAbs, evSig) {
+// Correspondances d'un trajet : liste de {key, p}. `key` = identité stable
+// (trip descendant → trip montant) : deux trajets d'un même choix qui passent
+// par la MÊME correspondance partagent le même aléa — il ne doit être compté
+// qu'une fois dans l'agrégation (sinon on sur-compterait la robustesse).
+function journeyTransfers(jr, nowAbs, evSig) {
     const bus = jr.legs.filter(l => l.type === 'bus');
-    let p = 1;
-    for (let i = 0; i < bus.length - 1; i++) p *= pTransferSuccess(bus[i], bus[i + 1], nowAbs, evSig);
-    return p;
+    const out = [];
+    for (let i = 0; i < bus.length - 1; i++) {
+        out.push({ key: `${bus[i].trip_id}>${bus[i + 1].trip_id}`,
+                   p: pTransferSuccess(bus[i], bus[i + 1], nowAbs, evSig) });
+    }
+    return out;
 }
 
-// Points (t, cumP) de la CDF d'arrivée d'un choix : chaque trajet contribue
-// rawP/totalP × CDF linéaire sur sa fenêtre d'arrivée [p10, p90] (Cas 6).
-// tPlateau : borne basse du plateau 0 % (ex. now − passé affiché).
+// Faisabilité d'un trajet = produit des probabilités de ses correspondances
+// (une fois embarqué sur le dernier bus, l'arrivée est acquise).
+export function journeyFeasibility(jr, nowAbs, evSig) {
+    return journeyTransfers(jr, nowAbs, evSig).reduce((p, t) => p * t.p, 1);
+}
+
+// Points (t, cumP) de la CDF d'arrivée d'un choix.
+//
+// Modèle (corrigé — voir bug « CDF de la 51 trop confiante ») :
+//   P(arriver avant t) = P(AU MOINS UN trajet du choix est réellement faisable
+//   et arrive avant t). La faisabilité d'un trajet est le produit de ses
+//   correspondances ; les correspondances PARTAGÉES entre trajets ne comptent
+//   qu'une fois (inclusion-exclusion sur les identités de correspondance).
+//   Ainsi un choix dont tous les trajets dépendent d'une même correspondance
+//   à 64 % PLAFONNE autour de 64 % — il ne « remonte » à 100 % que si des
+//   trajets aux correspondances indépendantes existent. La masse manquante
+//   (1 − plafond) = probabilité de tout rater → arriver bien plus tard / hors
+//   horizon, honnêtement non comblée.
+//
+//   Chaque trajet étale son arrivée sur [p10, p90] (rampe linéaire) ; à t donné,
+//   sa contribution vaut faisabilité × rampe(t). tPlateau : borne basse à 0 %.
 export function computeChoiceCdf(journeys, nowAbs, evSig, tPlateau = null) {
-    const wjs = journeys.map(jr => {
+    const J = journeys.map(jr => {
         const bus = jr.legs.filter(l => l.type === 'bus');
         if (!bus.length) return null;
         const last = bus[bus.length - 1];
         const sg   = evSig(jr.arrival_s, last.trip_id, nowAbs);
         return { tLo: jr.arrival_s - sg.early, tHi: jr.arrival_s + sg.late,
-                 rawP: journeyTransferP(jr, nowAbs, evSig) };
+                 transfers: journeyTransfers(jr, nowAbs, evSig) };
     }).filter(Boolean);
-    const totalP = wjs.reduce((s, x) => s + x.rawP, 0);
-    if (totalP <= 0 || !wjs.length) return { pts: [], p90First: null };
+    if (!J.length) return { pts: [], p90First: null };
 
     const allT = new Set();
     if (tPlateau != null) allT.add(tPlateau);
-    wjs.forEach(({ tLo, tHi }) => {
+    J.forEach(({ tLo, tHi }) => {
         allT.add(tLo); allT.add(tHi);
         for (let t = tLo; t <= tHi; t += 20) allT.add(t);
     });
-    const pts = [...allT].sort((a, b) => a - b).map(t => {
-        let cumP = 0;
-        wjs.forEach(({ tLo, tHi, rawP }) => {
-            const w = rawP / totalP;
-            if (t >= tHi) cumP += w;
-            else if (t > tLo) cumP += w * (t - tLo) / (tHi - tLo);
-        });
-        return { t, cumP };
+    const grid = [...allT].sort((a, b) => a - b);
+
+    const ramp = (t, tLo, tHi) => tHi <= tLo
+        ? (t >= tHi ? 1 : 0)
+        : Math.max(0, Math.min(1, (t - tLo) / (tHi - tLo)));
+
+    let running = 0;
+    const pts = grid.map(t => {
+        // Trajets dont la fenêtre d'arrivée a commencé à t
+        const S = [];
+        for (const j of J) { const r = ramp(t, j.tLo, j.tHi); if (r > 0) S.push({ j, r }); }
+        // Inclusion-exclusion : P(⋃ trajets faisables & arrivés). Pour un sous-
+        // ensemble, la faisabilité = produit sur l'UNION des correspondances
+        // (clés dédupliquées), les rampes se multiplient.
+        let cum = 0;
+        const n = S.length;
+        for (let mask = 1; mask < (1 << n); mask++) {
+            const keyP = new Map();
+            let rampProd = 1, bits = 0;
+            for (let i = 0; i < n; i++) if (mask & (1 << i)) {
+                bits++;
+                rampProd *= S[i].r;
+                for (const tr of S[i].j.transfers) keyP.set(tr.key, tr.p);
+            }
+            let pFeas = 1;
+            for (const p of keyP.values()) pFeas *= p;
+            cum += (bits & 1 ? 1 : -1) * pFeas * rampProd;
+        }
+        running = Math.max(running, Math.max(0, Math.min(1, cum)));
+        return { t, cumP: running };
     });
-    return { pts, p90First: Math.min(...wjs.map(x => x.tHi)) };
+
+    // p90 = premier instant où la CDF atteint 90 %. null si le plafond reste
+    // sous 90 % dans l'horizon : signal honnête « jamais sûr à 90 % ».
+    const p90 = pts.find(p => p.cumP >= 0.9);
+    return { pts, p90First: p90 ? p90.t : null };
 }
 
 // ── File de priorité minimale sur t (FIFO à t égal) ────────────────────────

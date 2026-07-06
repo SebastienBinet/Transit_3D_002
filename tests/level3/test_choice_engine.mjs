@@ -147,9 +147,41 @@ test('invariants : CDF croissante, bornée [0,1], p90First cohérent', () => {
             assert.ok(cumP >= 0 && cumP <= 1 + 1e-9);
             prev = cumP;
         }
-        assert.ok(p90First >= c.bestArrivalS - 1,
+        // p90First : soit null (plafond < 90 %, choix jamais sûr à 90 %),
+        // soit ≥ la meilleure arrivée p50.
+        assert.ok(p90First === null || p90First >= c.bestArrivalS - 1,
             `p90First (${p90First}) < meilleure arrivée p50 (${c.bestArrivalS})`);
     }
+});
+
+// ── Régression : le risque de correspondance dégrade la CDF ─────────────────
+// Bug signalé : la CDF de la 51 montrait 90 % de certitude d'arrivée dès 8h02
+// alors que la correspondance 51→165 n'est attrapée qu'à ~64 %. La CDF ne doit
+// pas dépasser un plafond dicté par ce risque tant qu'aucun trajet aux
+// correspondances indépendantes ne comble la masse manquante.
+test('régression : la CDF de la 51 plafonne sous 90 % (risque 51→165)', () => {
+    const eng = makeEngine();
+    const c51 = eng.getChoices(T0).find(c => c.lineId === '51N');
+    const { pts, p90First } = computeChoiceCdf(c51.journeys, T0, eng.evSig, T0 - 900);
+    const ceiling = Math.max(...pts.map(p => p.cumP));
+    // Tous les trajets de la 51 partagent la correspondance 51→165 (~64 %) :
+    // le plafond doit rester nettement sous 90 %.
+    assert.ok(ceiling < 0.9, `plafond CDF 51 = ${(ceiling*100).toFixed(0)} %, attendu < 90 %`);
+    // Donc aucun instant à 90 % dans l'horizon.
+    assert.equal(p90First, null, `p90First devrait être null, reçu ${p90First}`);
+    // CDF à 8h02 nettement sous l'ancien 93 %.
+    const at802 = pts.filter(p => p.t <= 8*3600 + 2*60).map(p => p.cumP).pop() ?? 0;
+    assert.ok(at802 < 0.85, `CDF(8h02) = ${(at802*100).toFixed(0)} %, attendu < 85 %`);
+});
+
+test('contraste : un choix à correspondance fiable reste confiant', () => {
+    // La 66 → 144 a une grande marge de correspondance : sa CDF doit, elle,
+    // atteindre 90 % (plafond élevé) — le contraste que le bug masquait.
+    const eng = makeEngine();
+    const c66 = eng.getChoices(T0).find(c => c.lineId === '66N');
+    const { pts } = computeChoiceCdf(c66.journeys, T0, eng.evSig, T0 - 900);
+    const ceiling = Math.max(...pts.map(p => p.cumP));
+    assert.ok(ceiling >= 0.9, `plafond CDF 66 = ${(ceiling*100).toFixed(0)} %, attendu ≥ 90 %`);
 });
 
 test('il reste des choix tant que les horaires couvrent la période', () => {

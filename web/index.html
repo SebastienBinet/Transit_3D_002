@@ -137,6 +137,7 @@
       <option value="4">Cas 4 — lignes STM réelles</option>
       <option value="5">Cas 5 — STM simulation horaires</option>
       <option value="6">Cas 6 — Trajets 51∩66 → 480∩144</option>
+      <option value="7">Cas 7 — Choix vivants 51∩66 → 480∩144</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -171,6 +172,8 @@
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
     import { createJourneyPanel } from './js/journey-panel.js';
+    import { createChoiceEngine } from './js/choice-engine.js';
+    import { createChoicePanel } from './js/choice-panel.js';
     import { JOURNEY_COLORS } from './js/colors.js';
     import { create as createWalkMode } from './js/viz-mode-walk.js';
 
@@ -180,6 +183,7 @@
     let lastTs = null;
     let walkMode = null;
     let journeyPanel = null;
+    let choiceEngine = null;   // Cas 7 — remis à zéro au rembobinage
 
     // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
     const storyLegendHTML = document.getElementById('legend').innerHTML;
@@ -222,7 +226,68 @@
 
     function teardownJourneyPanel() {
       if (journeyPanel) { journeyPanel.dispose(); journeyPanel = null; }
+      choiceEngine = null;
       setJourneyHighlight(null);
+    }
+
+    async function loadChoiceCase7() {
+      // Cas 7 : choix vivants. La 3D réutilise le rejeu horaire du Cas 5
+      // (cônes 1 h) avec une plage de lecture étendue ; le panneau montre les
+      // prochaines actions possibles, cliquables, fournies par choice-engine.
+      let data, bounds;
+      try {
+        [data, bounds] = await Promise.all([
+          loadCircuits('./data'),
+          fetch('./data/map_bounds.json').then(r => r.json()),
+        ]);
+      } catch (err) {
+        alert(`Les données du Cas 7 sont introuvables.\n\n${err.message}`);
+        return;
+      }
+
+      // Lecture jusqu'à la fin des horaires chargés (10h30 après la re-sync).
+      const dataEndS = Math.max(...data.circuits.flatMap(c =>
+        c.trips.map(t => t.schedule[t.schedule.length - 1]?.t_arr ?? 0)), 0);
+      const t0 = data.index.t0_seconds;
+      const playHorizonS = Math.max(data.index.horizon_s, dataEndS - t0);
+
+      const model = createScheduleModel(data, { playHorizonS });
+      routes = model.routes;
+
+      choiceEngine = createChoiceEngine({
+        circuits: data.circuits,
+        sigma: data.index.sigma,
+        originLines: ['51', '66'],
+        destLines:   ['480', '144'],
+        departS: t0,
+      });
+
+      init(canvas, {
+        routes,
+        transferWindows: [],
+        mapBackground: { url: './data/map_montreal.png', bounds },
+        // buildTimeGrid s'étend jusqu'à t0 + 2×horizonS → moitié de la plage de lecture
+        timeGrid: { t0Seconds: t0, horizonS: playHorizonS / 2, bounds },
+      });
+
+      const USER_COLOR = 0xffdd22;
+      initPassengers(1, [USER_COLOR]);
+      setPassengerT0(t0);
+      setPassengerSource(tAbs => [{
+        journey_id: 1, color: USER_COLOR,
+        ...choiceEngine.getPassenger(tAbs),
+      }]);
+
+      journeyPanel = createChoicePanel({
+        container: document.getElementById('legend'),
+        engine: choiceEngine,
+        t0,
+        onCommit: tripIds => setJourneyHighlight(tripIds),
+      });
+
+      player = model;
+      player.setSpeed(Number(document.getElementById('speed-select').value));
+      update();
     }
 
     async function loadJourneyCase6() {
@@ -284,6 +349,10 @@
       }
       if (scenarioId === '6') {
         await loadJourneyCase6();
+        return;
+      }
+      if (scenarioId === '7') {
+        await loadChoiceCase7();
         return;
       }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
@@ -495,7 +564,15 @@
 
     document.getElementById('btn-play').onclick    = () => player?.play();
     document.getElementById('btn-pause').onclick   = () => player?.pause();
-    document.getElementById('btn-rewind').onclick  = () => { player?.seekTo(0); update(); };
+    document.getElementById('btn-rewind').onclick  = () => {
+      player?.seekTo(0);
+      if (choiceEngine) {        // Cas 7 : oublier les engagements et les colonnes
+        choiceEngine.reset();
+        journeyPanel?.reset?.();
+        setJourneyHighlight(null);
+      }
+      update();
+    };
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));
     document.getElementById('scenario-select').onchange = e => load(e.target.value);

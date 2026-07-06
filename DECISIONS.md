@@ -198,3 +198,43 @@ structurés), `DECISIONS.md` (ce fichier).
 Pas de skills Claude Code custom au départ: hiérarchie CLAUDE.md + sous-agents au besoin.
 Pas de Claude Design à l'étape prototype (à reconsidérer pour le polissage UI / produit réel).
 CLAUDE.md racine maigre (chargé chaque session); le détail/pourquoi vit ici.
+
+---
+
+## 14. Cas 7 — Choix vivants (décisions du porteur, 2026-07-06)
+
+Concept : le panneau ne montre plus des trajets figés (Cas 6) mais **l'ensemble des
+prochaines actions possibles « maintenant »**, qui expirent et sont remplacées.
+L'usager peut s'engager dans un choix et changer d'idée tant que c'est faisable.
+
+Décisions :
+- **Colonne = prochaine action** (« attendre la 51 », « marcher vers la 103 »,
+  « descendre à X pour la 165 »), pas un trajet complet. La CDF de gauche est la
+  distribution d'arrivée conditionnelle à s'engager maintenant, agrégée sur les
+  meilleurs trajets qui découlent de l'action.
+- **Interactif** : clic sur une colonne = s'engager. Un seul bonhomme 3D. Le moteur
+  recalcule les choix depuis la position courante (changer d'idée en pleine marche
+  est permis tant que les horaires le permettent).
+- **Péremption au p50 planifié** (déterministe). Le modèle σ ne sert qu'aux CDF.
+  Tension assumée : le panneau dit « trop tard » là où la CDF dirait « il restait
+  une chance » — à revisiter après le prototype.
+- **N = 4 meilleurs choix**, dédoublonnés par ligne-direction (départ le plus tôt
+  attrapable). Quand un choix meurt, son remplaçant (passage suivant) apparaît.
+- **Colonnes** : les nouvelles entrent à droite ; un choix mort reste affiché,
+  estompé, sa largeur décroît jusqu'à 0 en 15 min puis il est retiré. Transitions douces.
+- **Fenêtre glissante** : 90 min de futur, 15 min de passé ; la ligne « maintenant »
+  reste fixe à 15/105 de la hauteur. Le diagramme « coule » vers le bas.
+- **Marches affichées** ; une marche non entamée est ancrée à max(maintenant, plus
+  tôt possible) — elle glisse avec le temps puis le choix expire.
+- **Pas de légende ni de sélecteur de mode** : bandes + CDF seulement.
+
+Architecture : `web/js/choice-engine.js` = moteur **pur** (aucun import DOM /
+Three.js / Canvas), testable sous Node (L3). Il énumère la faisabilité par un
+Dijkstra temporel sur les horaires compacts (§5bis) — rejeu déterministe des p50
+et du modèle σ, aucune prédiction inventée (même réconciliation que §5bis).
+**Portabilité** : ce moteur servira de référence pour le futur code Python temps
+réel du produit ; d'où : fonctions data-in/data-out, état explicite (plan de legs),
+constantes nommées, pas d'astuce navigateur. Le modèle de probabilité (σ d'événement,
+P(transfert), CDF) y est réimplémenté paramétriquement ; la copie interne de
+journey-panel.js (Cas 6) est conservée telle quelle — le moteur fait foi pour le
+portage. `web/js/choice-panel.js` (DOM/Canvas) ne fait que dessiner.

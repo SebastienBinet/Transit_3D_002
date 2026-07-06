@@ -36,8 +36,11 @@ TRAJ_STEP_S    = 60.0         # résolution interne du cône
 
 # ── Fenêtre de génération : on garde tous les passages qui chevauchent ─────
 # [T0 - PRE, T0 + HORIZON + POST] pour disposer du passage d'avant et d'après.
+# POST étendu à 2 h 30 (couverture jusqu'à 10 h 30) : le Cas 7 remplace chaque
+# choix expiré par les passages suivants, il faut donc des horaires bien au-delà
+# de l'horizon d'affichage. HORIZON_S reste 1 h (fenêtre affichée du Cas 5).
 GEN_PRE_S  = 1800.0          # 30 min avant T0
-GEN_POST_S = 1800.0          # 30 min après la fin de l'horizon
+GEN_POST_S = 9000.0          # 2 h 30 après la fin de l'horizon → couvre 10 h 30
 
 # ── Modèle d'incertitude d'adhérence (σ partagé) ───────────────────────────
 # σ(Δt) = SIGMA_COEFF_MIN · (Δt_min)^SIGMA_EXP minutes.
@@ -55,6 +58,8 @@ LINE_COLORS_HEX = {
     "144N": "#88ff44", "144S": "#55cc11", "124N": "#ff9900", "124S": "#cc6600",
     "480N": "#9900cc", "480S": "#6600aa",
     "103N": "#ff6600", "103S": "#cc4400", "24N":  "#00ccaa", "24S":  "#009977",
+    "104N": "#ee2299", "104S": "#aa1166", "119N": "#aacc22", "119S": "#778811",
+    "138N": "#6655ff", "138S": "#3322cc", "71N":  "#bb7755", "71S":  "#885533",
 }
 
 
@@ -327,8 +332,9 @@ def build_circuits() -> tuple[list[dict], dict]:
 
 
 def main() -> None:
-    print(f"Construction des circuits (fenêtre {T0_SECONDS/3600:.1f}h → "
-          f"{(T0_SECONDS+HORIZON_S)/3600:.1f}h, génération ±30 min) …")
+    print(f"Construction des circuits (fenêtre affichée {T0_SECONDS/3600:.1f}h → "
+          f"{(T0_SECONDS+HORIZON_S)/3600:.1f}h ; génération "
+          f"{(T0_SECONDS-GEN_PRE_S)/3600:.2f}h → {(T0_SECONDS+HORIZON_S+GEN_POST_S)/3600:.2f}h) …")
     circuit_files, index = build_circuits()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

@@ -119,9 +119,12 @@ export function buildCone(sched, lengthM, nowAbs, nowRel, horizonS, stepS, sigma
 
 // ── Modèle de scénario façonné comme un player (compatible index.html) ────
 // args.index : CircuitIndex. args.circuits : [CircuitData] (fichiers chargés).
-export function createScheduleModel({ index, circuits }) {
+// opts.playHorizonS : borne de lecture du player (défaut : horizon des cônes).
+// Le Cas 7 lit bien au-delà de l'horizon de prédiction (cônes toujours 1 h).
+export function createScheduleModel({ index, circuits }, opts = {}) {
     const t0       = index.t0_seconds;
     const horizon  = index.horizon_s;
+    const playEnd  = opts.playHorizonS ?? horizon;
     const frameInt = index.frame_interval ?? 5.0;
     const step     = index.traj_step ?? 60.0;
     const sigmaFn  = makeSigma(index.sigma);
@@ -187,15 +190,15 @@ export function createScheduleModel({ index, circuits }) {
         pause() { playing = false; },
         setSpeed(s) { speed = Math.max(0.1, s); },
 
-        next() { now = Math.min(horizon, now + frameInt); refresh(true); },
+        next() { now = Math.min(playEnd, now + frameInt); refresh(true); },
         prev() { now = Math.max(0, now - frameInt); refresh(true); },
 
-        seekTo(t) { now = Math.min(horizon, Math.max(0, t)); refresh(true); },
+        seekTo(t) { now = Math.min(playEnd, Math.max(0, t)); refresh(true); },
 
         tick(wallDelta) {
             if (!playing) return false;
             now += wallDelta * speed;
-            if (now >= horizon) { now = horizon; playing = false; }
+            if (now >= playEnd) { now = playEnd; playing = false; }
             return refresh(false);
         },
     };

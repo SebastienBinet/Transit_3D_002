@@ -24,34 +24,6 @@
       "n_trips": 9
     },
     {
-      "line_id": "104N",
-      "gtfs_direction_id": "0",
-      "color": "#ee2299",
-      "file": "circuits/104N.json",
-      "n_trips": 16
-    },
-    {
-      "line_id": "104S",
-      "gtfs_direction_id": "1",
-      "color": "#aa1166",
-      "file": "circuits/104S.json",
-      "n_trips": 8
-    },
-    {
-      "line_id": "119N",
-      "gtfs_direction_id": "0",
-      "color": "#aacc22",
-      "file": "circuits/119N.json",
-      "n_trips": 8
-    },
-    {
-      "line_id": "119S",
-      "gtfs_direction_id": "1",
-      "color": "#778811",
-      "file": "circuits/119S.json",
-      "n_trips": 8
-    },
-    {
       "line_id": "11N",
       "gtfs_direction_id": "1",
       "color": "#44cc44",
@@ -92,20 +64,6 @@
       "color": "#cc9900",
       "file": "circuits/129S.json",
       "n_trips": 8
-    },
-    {
-      "line_id": "138N",
-      "gtfs_direction_id": "0",
-      "color": "#6655ff",
-      "file": "circuits/138N.json",
-      "n_trips": 8
-    },
-    {
-      "line_id": "138S",
-      "gtfs_direction_id": "1",
-      "color": "#3322cc",
-      "file": "circuits/138S.json",
-      "n_trips": 7
     },
     {
       "line_id": "144N",
@@ -203,20 +161,6 @@
       "gtfs_direction_id": "1",
       "color": "#cc1133",
       "file": "circuits/66S.json",
-      "n_trips": 9
-    },
-    {
-      "line_id": "71N",
-      "gtfs_direction_id": "1",
-      "color": "#bb7755",
-      "file": "circuits/71N.json",
-      "n_trips": 9
-    },
-    {
-      "line_id": "71S",
-      "gtfs_direction_id": "0",
-      "color": "#885533",
-      "file": "circuits/71S.json",
       "n_trips": 9
     }
   ]

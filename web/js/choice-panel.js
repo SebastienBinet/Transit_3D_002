@@ -57,6 +57,10 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
     // u = facteur de largeur animé (0 → 1 à la naissance ; suit la cible à la mort).
     let cols = [];
 
+    // Colonne survolée (id) — lie visuellement la bande (droite) et sa CDF (gauche) :
+    // survoler l'une met l'autre en évidence et estompe les autres colonnes.
+    let hoveredId = null;
+
     // ── Fenêtre glissante ──────────────────────────────────────────────────
     function btY(t, nowAbs) {
         const tLo = nowAbs - PAST_S;
@@ -111,15 +115,76 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
         cdfCvs.style.cssText = `width:${CDF_W}px; height:${H}px; display:block;`;
         cdfCtx = cdfCvs.getContext('2d');
 
+        cdfCvs.style.cursor = 'pointer';
+
         bandsCvs = document.createElement('canvas');
         bandsCvs.width = PANEL_W; bandsCvs.height = H;
         bandsCvs.style.cssText = `width:${PANEL_W}px; height:${H}px; display:block; cursor:pointer;`;
         bandsCtx = bandsCvs.getContext('2d');
-        bandsCvs.onclick = onClickBands;
+
+        // Clic : s'engager. Survol : lier bande ↔ CDF. Les deux canvas partagent
+        // la même disposition de colonnes, d'où le lien dans les deux sens.
+        bandsCvs.onclick     = e => commitCol(colAtBandX(evX(e, bandsCvs)));
+        cdfCvs.onclick       = e => commitCol(colAtCdfX(evX(e, cdfCvs)));
+        bandsCvs.onmousemove = e => { const c = colAtBandX(evX(e, bandsCvs)); setHover(c ? c.id : null); };
+        cdfCvs.onmousemove   = e => { const c = colAtCdfX(evX(e, cdfCvs));   setHover(c ? c.id : null); };
+        bandsCvs.onmouseleave = () => setHover(null);
+        cdfCvs.onmouseleave   = () => setHover(null);
 
         wrapper.append(cdfCvs, bandsCvs);
         contentDiv.appendChild(wrapper);
         container.append(hdr, statusEl, contentDiv);
+    }
+
+    const evX = (e, cvs) => e.clientX - cvs.getBoundingClientRect().left;
+
+    // Disposition des colonnes avec, pour chacune, sa plage X côté bandes ET côté
+    // CDF (alignées proportionnellement) — sert au survol et au clic des deux côtés.
+    function columnRanges() {
+        const bandDrawable = PANEL_W - LEFT_W - RIGHT_PAD;
+        const cdfDrawable  = CDF_W - CDF_LPAD;
+        return layout().map(({ col, x, w }) => ({
+            col, x, w,
+            cdfX: CDF_LPAD + ((x - LEFT_W) / bandDrawable) * cdfDrawable,
+            cdfW: (w / bandDrawable) * cdfDrawable,
+        }));
+    }
+    function colAtBandX(x) {
+        for (const r of columnRanges()) if (x >= r.x && x < r.x + r.w) return r.col;
+        return null;
+    }
+    function colAtCdfX(x) {
+        for (const r of columnRanges()) if (x >= r.cdfX && x < r.cdfX + r.cdfW) return r.col;
+        return null;
+    }
+
+    function setHover(id) {
+        if (hoveredId === id) return;
+        hoveredId = id;
+        redraw();   // reflète immédiatement, même en pause
+    }
+
+    // Multiplicateur d'opacité de survol : la colonne survolée reste pleine,
+    // les autres s'estompent (mise en évidence de la paire bande ↔ CDF).
+    function hoverMul(col) {
+        if (hoveredId == null) return 1;
+        return col.id === hoveredId ? 1 : 0.22;
+    }
+
+    function commitCol(col) {
+        if (!col || col.state !== 'live' || col.choice.committed) return;
+        const tAbs = t0 + lastSimTime;
+        if (engine.commit(col.id, tAbs)) {
+            col.commitS = tAbs;
+            onCommit?.(engine.getPlanTripIds());
+        }
+    }
+
+    function redraw() {
+        if (collapsed || !bandsCtx) return;
+        const tAbs = t0 + lastSimTime;
+        drawBands(tAbs);
+        drawCdf(tAbs);
     }
 
     // ── Synchronisation des colonnes avec le moteur ────────────────────────
@@ -174,21 +239,6 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
         return out;
     }
 
-    function onClickBands(e) {
-        const rect = bandsCvs.getBoundingClientRect();
-        const xClick = e.clientX - rect.left;
-        const tAbs = t0 + lastSimTime;
-        for (const { col, x, w } of layout()) {
-            if (xClick >= x && xClick < x + w && col.state === 'live' && !col.choice.committed) {
-                if (engine.commit(col.id, tAbs)) {
-                    col.commitS = tAbs;
-                    onCommit?.(engine.getPlanTripIds());
-                }
-                return;
-            }
-        }
-    }
-
     // ── Dessin d'une colonne (bandes) ──────────────────────────────────────
     // anchor des legs glissants : maintenant (vivant), commit (engagé), mort (figé).
     function colAnchor(col, tAbs) {
@@ -203,9 +253,17 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
         const xc    = x + w / 2;
         const halfW = Math.min(w / 2 - 1.5, BAND_HALF_MAX);
         const dead  = col.state === 'dead';
-        const alpha = dead ? 0.32 * Math.max(0.3, col.u) : 1.0;
+        const alpha = (dead ? 0.32 * Math.max(0.3, col.u) : 1.0) * hoverMul(col);
         const anchor = colAnchor(col, tAbs);
         const jr = ch.journeys[0];
+
+        // Fond de mise en évidence quand survolée (lie visuellement à sa CDF)
+        if (col.id === hoveredId) {
+            c.save();
+            c.globalAlpha = 0.10; c.fillStyle = '#ffffff';
+            c.fillRect(x, TOP_PAD - 14, w, DRAW_H + 14);
+            c.restore();
+        }
 
         c.save();
         c.globalAlpha = alpha;
@@ -382,6 +440,15 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
             const { pts, p90First } = engine.choiceCdf(ch, tAbs, tLo);
             if (pts.length < 2) continue;
             const gCol = hex(LINE_COLORS[ch.lineId] ?? 0x888888);
+            const hm = hoverMul(col);
+
+            // Fond de mise en évidence quand survolée (lie visuellement à sa bande)
+            if (col.id === hoveredId) {
+                c.save();
+                c.globalAlpha = 0.10; c.fillStyle = '#ffffff';
+                c.fillRect(xBase, TOP_PAD - 12, maxW + 3, DRAW_H + 12);
+                c.restore();
+            }
 
             c.save();
             c.beginPath();
@@ -391,7 +458,7 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
                 c.lineTo(xBase + pts[i].cumP * maxW, btY(pts[i].t, tAbs));
             }
             c.closePath();
-            c.fillStyle = gCol; c.globalAlpha = 0.18;
+            c.fillStyle = gCol; c.globalAlpha = 0.18 * hm;
             c.fill();
 
             c.beginPath();
@@ -400,7 +467,7 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
                 const py = btY(t, tAbs);
                 if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
             });
-            c.globalAlpha = 0.9; c.strokeStyle = gCol; c.lineWidth = 1.5;
+            c.globalAlpha = 0.9 * hm; c.strokeStyle = gCol; c.lineWidth = 1.5;
             c.stroke();
             c.restore();
 
@@ -408,6 +475,7 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
             if (p90First != null && p90First <= tHi && p90First >= tLo) {
                 const yM = btY(p90First, tAbs);
                 c.save();
+                c.globalAlpha = hm;
                 c.strokeStyle = gCol; c.lineWidth = 1.5;
                 c.beginPath(); c.moveTo(xBase, yM); c.lineTo(xBase + maxW, yM); c.stroke();
                 if (maxW > 26) {

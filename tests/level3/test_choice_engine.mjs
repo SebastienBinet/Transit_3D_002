@@ -190,12 +190,27 @@ test('arbre de repli : distribution d\'arrivée bornée', () => {
 });
 
 test('il reste des choix tant que les horaires couvrent la période', () => {
-    // NOTE : les circuits actuels couvrent ~6h30 → 8h30. Après la re-sync des
-    // données (fenêtre 10h30), étendre cette boucle au-delà de T0+1800.
     const eng = makeEngine();
-    for (const t of [T0, T0 + 600, T0 + 1200, T0 + 1800]) {
+    for (const t of [T0, T0 + 600, T0 + 1200, T0 + 1800, T0 + 3600]) {
         const n = eng.getChoices(t).length;
         assert.ok(n >= 1 && n <= 4, `à t=${t} : ${n} choix`);
+    }
+});
+
+// ── Garde-fou : santé de la recherche contre les VRAIES données ─────────────
+// Régression qui aurait attrapé le bug des lignes candidates (138/104/119/71) :
+// si les données deviennent trop denses, la recherche est coupée au garde-fou
+// AVANT de trouver le moindre trajet → « 0 choix » silencieux. On vérifie qu'à
+// des instants représentatifs, aucune recherche ne se coupe sans complétion.
+test('garde-fou : jamais coupé sans complétion (données du corridor)', () => {
+    const eng = makeEngine();
+    for (const t of [T0, T0 + 200, T0 + 400, T0 + 600, T0 + 1200]) {
+        eng.getChoices(t);
+        const s = eng.lastSearchStats;
+        assert.ok(s, 'lastSearchStats absent');
+        assert.ok(!(s.hitCap && s.nCompletions === 0),
+            `à t=${t} : recherche coupée au garde-fou (${s.settles}/${s.maxSettles}) `
+            + `sans trajet trouvé — données trop denses pour ce corridor`);
     }
 });
 

@@ -10,7 +10,6 @@
 //
 // DOM + Canvas 2D seulement — la logique de simulation vit dans choice-engine.js.
 
-import { computeChoiceCdf } from './choice-engine.js';
 import { LINE_COLORS } from './colors.js';
 
 const PANEL_W  = 420;
@@ -380,7 +379,7 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
             const xBase = CDF_LPAD + ((x - LEFT_W) / bandDrawable) * cdfDrawable;
             const maxW  = (w / bandDrawable) * cdfDrawable - 3;
             if (maxW < 4) continue;
-            const { pts, p90First } = computeChoiceCdf(ch.journeys, tAbs, engine.evSig, tLo);
+            const { pts, p90First } = engine.choiceCdf(ch, tAbs, tLo);
             if (pts.length < 2) continue;
             const gCol = hex(LINE_COLORS[ch.lineId] ?? 0x888888);
 

@@ -61,92 +61,94 @@ export function pTransferSuccess(legA, legB, nowAbs, evSig) {
     return Math.max(0, Math.min(1, 0.5 + margin / (2 * sigma)));
 }
 
-// Correspondances d'un trajet : liste de {key, p}. `key` = identité stable
-// (trip descendant → trip montant) : deux trajets d'un même choix qui passent
-// par la MÊME correspondance partagent le même aléa — il ne doit être compté
-// qu'une fois dans l'agrégation (sinon on sur-compterait la robustesse).
-function journeyTransfers(jr, nowAbs, evSig) {
-    const bus = jr.legs.filter(l => l.type === 'bus');
-    const out = [];
-    for (let i = 0; i < bus.length - 1; i++) {
-        out.push({ key: `${bus[i].trip_id}>${bus[i + 1].trip_id}`,
-                   p: pTransferSuccess(bus[i], bus[i + 1], nowAbs, evSig) });
+// ── CDF d'arrivée d'un choix : modèle « on prend le prochain bus qui vient » ─
+//
+// Correctif du bug « CDF trop confiante » (Cas 7). L'ancien modèle fixait UN
+// passage par correspondance et rapportait un plafond = produit des correspon-
+// dances (64 % pour la 51). Or l'usager ne s'engage pas sur un passage précis :
+// il monte dans le PREMIER bus de la ligne qui arrive, et rater le passage
+// rapide ne fait que le décaler au suivant (arrivée plus tardive, mais il finit
+// par arriver). La CDF doit donc grimper vers ~100 % — plus tard.
+//
+// Modèle : arbre de repli borné. On propage une distribution d'« heure d'arrivée »
+// à travers les correspondances de l'ossature (spine) du choix. À chaque saut,
+// on considère les K premiers départs catchables de la ligne cible à l'arrêt ;
+// on attrape le k-ième avec prob p_k (rate les précédents × attrape celui-ci),
+// chacun menant à une arrivée aval propre. La masse qui rate les K départs
+// « fuit » (honnêtement non comblée). σ n'intervient que via p_k et l'étalement
+// final. PORTABLE : `departuresOf(lineId, gb, ga, afterT, K)` et `evSig` sont
+// injectés — aucune dépendance au moteur (réutilisable côté Python).
+export const RECOVERY_K = 3;   // départs de repli considérés par correspondance
+
+// Probabilité d'attraper le départ `dep` (trip depTripId) en étant descendu du
+// bus précédent (arrivée prevArr, trip prevTripId) puis marché walkS.
+function catchProb(prevArr, prevTripId, walkS, dep, depTripId, nowAbs, evSig) {
+    const sgA = evSig(prevArr, prevTripId, nowAbs);
+    const sgB = evSig(dep, depTripId, nowAbs);
+    const margin = dep - (prevArr + walkS);
+    const sigma  = sgA.late + sgB.early;
+    if (sigma <= 0) return margin >= 0 ? 1 : 0;
+    return Math.max(0, Math.min(1, 0.5 + margin / (2 * sigma)));
+}
+
+// Distribution d'arrivée : [{t, alightT, tripId, p}] (Σp ≤ 1 ; le déficit = tout
+// rater). spine.hops[0] = 1er segment ENGAGÉ (attrapé à coup sûr) ; hops[1..] =
+// correspondances à replis. spine.egressWalkS = marche finale vers la destination.
+export function choiceArrivalDist(spine, nowAbs, evSig, departuresOf, K = RECOVERY_K) {
+    const h0 = spine.hops[0];
+    let dist = [{ t: h0.arr, tripId: h0.tripId, p: 1 }];
+    for (let h = 1; h < spine.hops.length; h++) {
+        const hop = spine.hops[h];
+        const next = [];
+        for (const s of dist) {
+            const ready = s.t + hop.walkS;
+            const deps  = departuresOf(hop.lineId, hop.gb, hop.ga, ready, K);
+            let remain = s.p;
+            for (const d of deps) {
+                const pc = catchProb(s.t, s.tripId, hop.walkS, d.dep, d.tripId, nowAbs, evSig);
+                if (pc <= 0) continue;
+                next.push({ t: d.arr, tripId: d.tripId, p: remain * pc });
+                remain *= (1 - pc);
+                if (remain < 1e-4) break;
+            }
+            // `remain` restant = a raté les K départs → masse perdue (honnête)
+        }
+        // Fusionner les branches qui convergent sur le même passage
+        const merged = new Map();
+        for (const s of next) {
+            const ex = merged.get(s.tripId);
+            if (ex) ex.p += s.p; else merged.set(s.tripId, { ...s });
+        }
+        dist = [...merged.values()];
     }
-    return out;
+    return dist.map(s => ({ t: s.t + spine.egressWalkS, alightT: s.t, tripId: s.tripId, p: s.p }));
 }
 
-// Faisabilité d'un trajet = produit des probabilités de ses correspondances
-// (une fois embarqué sur le dernier bus, l'arrivée est acquise).
-export function journeyFeasibility(jr, nowAbs, evSig) {
-    return journeyTransfers(jr, nowAbs, evSig).reduce((p, t) => p * t.p, 1);
-}
-
-// Points (t, cumP) de la CDF d'arrivée d'un choix.
-//
-// Modèle (corrigé — voir bug « CDF de la 51 trop confiante ») :
-//   P(arriver avant t) = P(AU MOINS UN trajet du choix est réellement faisable
-//   et arrive avant t). La faisabilité d'un trajet est le produit de ses
-//   correspondances ; les correspondances PARTAGÉES entre trajets ne comptent
-//   qu'une fois (inclusion-exclusion sur les identités de correspondance).
-//   Ainsi un choix dont tous les trajets dépendent d'une même correspondance
-//   à 64 % PLAFONNE autour de 64 % — il ne « remonte » à 100 % que si des
-//   trajets aux correspondances indépendantes existent. La masse manquante
-//   (1 − plafond) = probabilité de tout rater → arriver bien plus tard / hors
-//   horizon, honnêtement non comblée.
-//
-//   Chaque trajet étale son arrivée sur [p10, p90] (rampe linéaire) ; à t donné,
-//   sa contribution vaut faisabilité × rampe(t). tPlateau : borne basse à 0 %.
-export function computeChoiceCdf(journeys, nowAbs, evSig, tPlateau = null) {
-    const J = journeys.map(jr => {
-        const bus = jr.legs.filter(l => l.type === 'bus');
-        if (!bus.length) return null;
-        const last = bus[bus.length - 1];
-        const sg   = evSig(jr.arrival_s, last.trip_id, nowAbs);
-        return { tLo: jr.arrival_s - sg.early, tHi: jr.arrival_s + sg.late,
-                 transfers: journeyTransfers(jr, nowAbs, evSig) };
-    }).filter(Boolean);
-    if (!J.length) return { pts: [], p90First: null };
-
+// Points (t, cumP) de la CDF d'arrivée à partir de la distribution des feuilles,
+// chaque feuille étalée sur sa fenêtre σ d'arrivée [p10, p90]. tPlateau : borne
+// basse du plateau 0 %. p90First = 1er instant à 90 %, ou null si jamais atteint.
+export function cdfFromArrivalDist(leaves, nowAbs, evSig, tPlateau = null) {
+    if (!leaves.length) return { pts: [], p90First: null };
+    const specs = leaves.map(l => {
+        const sg = evSig(l.alightT, l.tripId, nowAbs);
+        return { tLo: l.t - sg.early, tHi: l.t + sg.late, p: l.p };
+    });
     const allT = new Set();
     if (tPlateau != null) allT.add(tPlateau);
-    J.forEach(({ tLo, tHi }) => {
+    specs.forEach(({ tLo, tHi }) => {
         allT.add(tLo); allT.add(tHi);
         for (let t = tLo; t <= tHi; t += 20) allT.add(t);
     });
-    const grid = [...allT].sort((a, b) => a - b);
-
-    const ramp = (t, tLo, tHi) => tHi <= tLo
-        ? (t >= tHi ? 1 : 0)
-        : Math.max(0, Math.min(1, (t - tLo) / (tHi - tLo)));
-
     let running = 0;
-    const pts = grid.map(t => {
-        // Trajets dont la fenêtre d'arrivée a commencé à t
-        const S = [];
-        for (const j of J) { const r = ramp(t, j.tLo, j.tHi); if (r > 0) S.push({ j, r }); }
-        // Inclusion-exclusion : P(⋃ trajets faisables & arrivés). Pour un sous-
-        // ensemble, la faisabilité = produit sur l'UNION des correspondances
-        // (clés dédupliquées), les rampes se multiplient.
+    const pts = [...allT].sort((a, b) => a - b).map(t => {
         let cum = 0;
-        const n = S.length;
-        for (let mask = 1; mask < (1 << n); mask++) {
-            const keyP = new Map();
-            let rampProd = 1, bits = 0;
-            for (let i = 0; i < n; i++) if (mask & (1 << i)) {
-                bits++;
-                rampProd *= S[i].r;
-                for (const tr of S[i].j.transfers) keyP.set(tr.key, tr.p);
-            }
-            let pFeas = 1;
-            for (const p of keyP.values()) pFeas *= p;
-            cum += (bits & 1 ? 1 : -1) * pFeas * rampProd;
+        for (const { tLo, tHi, p } of specs) {
+            if (t >= tHi) cum += p;
+            else if (t > tLo) cum += p * (t - tLo) / (tHi - tLo);
         }
-        running = Math.max(running, Math.max(0, Math.min(1, cum)));
+        running = Math.max(running, Math.min(1, cum));
         return { t, cumP: running };
     });
-
-    // p90 = premier instant où la CDF atteint 90 %. null si le plafond reste
-    // sous 90 % dans l'horizon : signal honnête « jamais sûr à 90 % ».
     const p90 = pts.find(p => p.cumP >= 0.9);
     return { pts, p90First: p90 ? p90.t : null };
 }
@@ -267,6 +269,36 @@ export function createChoiceEngine({
             if (lst[mid].tDep < ready) lo = mid + 1; else hi = mid;
         }
         return lo;
+    }
+
+    // Les K premiers départs de `lineId` à l'arrêt `gb` (partant ≥ afterT) qui
+    // desservent aussi l'arrêt aval `ga` — pour l'arbre de repli de la CDF.
+    function departuresOfLineAt(lineId, gb, ga, afterT, K) {
+        const lst = boardIdx.get(gb);
+        if (!lst) return [];
+        const out = [];
+        for (let i = firstBoardable(lst, afterT); i < lst.length && out.length < K; i++) {
+            const trip = tripByIdx[lst[i].ti];
+            if (trip.lineId !== lineId) continue;
+            let arr = null;
+            for (let q = lst[i].pos + 1; q < trip.seq.length; q++) {
+                if (trip.seq[q].stop === ga) { arr = trip.seq[q].tArr; break; }
+            }
+            if (arr == null) continue;
+            out.push({ tripId: trip.tripId, dep: lst[i].tDep, arr });
+        }
+        return out;
+    }
+
+    // Ossature (spine) d'un choix : hop0 = 1er segment engagé (attrapé à coup sûr),
+    // hops suivants = correspondances à replis. legs = legs bruts du Dijkstra.
+    function makeSpine(hop0, restLegs, egressWalkS) {
+        const hops = [hop0];
+        for (const l of restLegs) {
+            hops.push({ lineId: l.lineId, gb: l.boardStop, ga: l.alightStop,
+                        dep: l.boardS, arr: l.alightS, tripId: l.tripId, walkS: l.fromWalkS });
+        }
+        return { hops, egressWalkS };
     }
 
     // ── Points origine / destination (milieu de la paire d'arrêts la plus proche) ──
@@ -593,6 +625,11 @@ export function createChoiceEngine({
             const f = comps[0].legs[0];
             const bs = stops[f.boardStop];
             const journeys = comps.map(c => formatJourney({ kind: 'board', walkS, tDep: f.boardS }, c));
+            // Ossature CDF : 1er bus engagé + ses correspondances (replis compris)
+            const rl = comps[0].legs;
+            const hop0 = { lineId: rl[0].lineId, gb: rl[0].boardStop, ga: rl[0].alightStop,
+                           dep: rl[0].boardS, arr: rl[0].alightS, tripId: rl[0].tripId, walkS: 0 };
+            const spine = makeSpine(hop0, rl.slice(1), comps[0].egressWalkS);
             choices.push({
                 id: `board:${f.tripId}@${bs.stopId}`,
                 kind: 'board',
@@ -605,7 +642,7 @@ export function createChoiceEngine({
                 walkS,
                 expiresS: f.boardS - walkS,
                 bestArrivalS: comps[0].arrivalS,
-                journeys,
+                journeys, spine,
             });
         }
         return choices;
@@ -644,6 +681,9 @@ export function createChoiceEngine({
         if (bestFinal) {
             const q = bestFinal.q;
             const g = trip.seq[q].stop;
+            // Ossature CDF : bus courant jusqu'à la descente choisie, puis marche.
+            const hop0 = { lineId: trip.lineId, gb: trip.seq[ride.boardPos].stop, ga: g,
+                           dep: ride.tBoard, arr: trip.seq[q].tArr, tripId: trip.tripId, walkS: 0 };
             choices.push({
                 id: `final:${trip.tripId}@${stops[g].stopId}`,
                 kind: 'final',
@@ -658,6 +698,7 @@ export function createChoiceEngine({
                     legs: [rideLegOf(q),
                            { type: 'walk', depart_s: trip.seq[q].tArr, arrive_s: bestFinal.arrival, final: true }],
                 }],
+                spine: { hops: [hop0], egressWalkS: egress.get(g) },
             });
         }
 
@@ -692,6 +733,11 @@ export function createChoiceEngine({
             const q = comps[0].meta.q;
             const bs = stops[f.boardStop];
             const journeys = comps.map(c => formatJourney({ kind: 'ride', rideLeg: rideLegOf(q) }, c));
+            // Ossature CDF : bus courant jusqu'à la descente (hop0, certain), puis
+            // la ligne cible et ses correspondances aval (replis compris).
+            const hop0 = { lineId: trip.lineId, gb: trip.seq[ride.boardPos].stop, ga: trip.seq[q].stop,
+                           dep: ride.tBoard, arr: trip.seq[q].tArr, tripId: trip.tripId, walkS: 0 };
+            const spine = makeSpine(hop0, comps[0].legs, comps[0].egressWalkS);
             choices.push({
                 id: `transfer:${trip.tripId}@${stops[trip.seq[q].stop].stopId}->${f.tripId}@${bs.stopId}`,
                 kind: 'transfer',
@@ -707,7 +753,7 @@ export function createChoiceEngine({
                 tDep: f.boardS,
                 expiresS: trip.seq[q].tDep,   // dernier moment : le bus quitte l'arrêt de descente
                 bestArrivalS: comps[0].arrivalS,
-                journeys,
+                journeys, spine,
             });
         }
         return choices;
@@ -799,6 +845,13 @@ export function createChoiceEngine({
         return plan.filter(l => l.type === 'ride').map(l => tripByIdx[l.ti].tripId);
     }
 
+    // CDF d'arrivée d'un choix (modèle « prochain bus qui vient » + repli).
+    function choiceCdf(choice, nowAbs, tPlateau = null) {
+        if (!choice?.spine) return { pts: [], p90First: null };
+        const leaves = choiceArrivalDist(choice.spine, nowAbs, evSig, departuresOfLineAt);
+        return cdfFromArrivalDist(leaves, nowAbs, evSig, tPlateau);
+    }
+
     return {
         origin, destination, departS,
         tripStarts, sigmaFn, evSig,
@@ -806,6 +859,7 @@ export function createChoiceEngine({
         reset,
         getChoices,
         commit,
+        choiceCdf,
         getState: phaseAt,
         getPassenger,
         getPlanTripIds,

@@ -14,112 +14,154 @@
       "gtfs_direction_id": "0",
       "color": "#ff6600",
       "file": "circuits/103N.json",
-      "n_trips": 18
+      "n_trips": 30
     },
     {
       "line_id": "103S",
       "gtfs_direction_id": "1",
       "color": "#cc4400",
       "file": "circuits/103S.json",
-      "n_trips": 5
+      "n_trips": 9
+    },
+    {
+      "line_id": "104N",
+      "gtfs_direction_id": "0",
+      "color": "#ee2299",
+      "file": "circuits/104N.json",
+      "n_trips": 16
+    },
+    {
+      "line_id": "104S",
+      "gtfs_direction_id": "1",
+      "color": "#aa1166",
+      "file": "circuits/104S.json",
+      "n_trips": 8
+    },
+    {
+      "line_id": "119N",
+      "gtfs_direction_id": "0",
+      "color": "#aacc22",
+      "file": "circuits/119N.json",
+      "n_trips": 8
+    },
+    {
+      "line_id": "119S",
+      "gtfs_direction_id": "1",
+      "color": "#778811",
+      "file": "circuits/119S.json",
+      "n_trips": 8
     },
     {
       "line_id": "11N",
       "gtfs_direction_id": "1",
       "color": "#44cc44",
       "file": "circuits/11N.json",
-      "n_trips": 2
+      "n_trips": 8
     },
     {
       "line_id": "11S",
       "gtfs_direction_id": "0",
       "color": "#229922",
       "file": "circuits/11S.json",
-      "n_trips": 3
+      "n_trips": 10
     },
     {
       "line_id": "124N",
       "gtfs_direction_id": "1",
       "color": "#ff9900",
       "file": "circuits/124N.json",
-      "n_trips": 6
+      "n_trips": 10
     },
     {
       "line_id": "124S",
       "gtfs_direction_id": "0",
       "color": "#cc6600",
       "file": "circuits/124S.json",
-      "n_trips": 5
+      "n_trips": 9
     },
     {
       "line_id": "129N",
       "gtfs_direction_id": "1",
       "color": "#ffcc00",
       "file": "circuits/129N.json",
-      "n_trips": 15
+      "n_trips": 21
     },
     {
       "line_id": "129S",
       "gtfs_direction_id": "0",
       "color": "#cc9900",
       "file": "circuits/129S.json",
-      "n_trips": 4
+      "n_trips": 8
+    },
+    {
+      "line_id": "138N",
+      "gtfs_direction_id": "0",
+      "color": "#6655ff",
+      "file": "circuits/138N.json",
+      "n_trips": 8
+    },
+    {
+      "line_id": "138S",
+      "gtfs_direction_id": "1",
+      "color": "#3322cc",
+      "file": "circuits/138S.json",
+      "n_trips": 7
     },
     {
       "line_id": "144N",
       "gtfs_direction_id": "0",
       "color": "#88ff44",
       "file": "circuits/144N.json",
-      "n_trips": 7
+      "n_trips": 12
     },
     {
       "line_id": "144S",
       "gtfs_direction_id": "1",
       "color": "#55cc11",
       "file": "circuits/144S.json",
-      "n_trips": 6
+      "n_trips": 11
     },
     {
       "line_id": "155N",
       "gtfs_direction_id": "0",
       "color": "#44ccdd",
       "file": "circuits/155N.json",
-      "n_trips": 7
+      "n_trips": 9
     },
     {
       "line_id": "155S",
       "gtfs_direction_id": "1",
       "color": "#2299aa",
       "file": "circuits/155S.json",
-      "n_trips": 6
+      "n_trips": 9
     },
     {
       "line_id": "165N",
       "gtfs_direction_id": "1",
       "color": "#ff8844",
       "file": "circuits/165N.json",
-      "n_trips": 15
+      "n_trips": 28
     },
     {
       "line_id": "165S",
       "gtfs_direction_id": "0",
       "color": "#cc5511",
       "file": "circuits/165S.json",
-      "n_trips": 22
+      "n_trips": 36
     },
     {
       "line_id": "24N",
       "gtfs_direction_id": "1",
       "color": "#00ccaa",
       "file": "circuits/24N.json",
-      "n_trips": 19
+      "n_trips": 28
     },
     {
       "line_id": "24S",
       "gtfs_direction_id": "0",
       "color": "#009977",
       "file": "circuits/24S.json",
-      "n_trips": 22
+      "n_trips": 37
     },
     {
       "line_id": "480N",
@@ -133,35 +175,49 @@
       "gtfs_direction_id": "0",
       "color": "#6600aa",
       "file": "circuits/480S.json",
-      "n_trips": 9
+      "n_trips": 13
     },
     {
       "line_id": "51N",
       "gtfs_direction_id": "0",
       "color": "#4488ff",
       "file": "circuits/51N.json",
-      "n_trips": 40
+      "n_trips": 58
     },
     {
       "line_id": "51S",
       "gtfs_direction_id": "1",
       "color": "#2255cc",
       "file": "circuits/51S.json",
-      "n_trips": 27
+      "n_trips": 40
     },
     {
       "line_id": "66N",
       "gtfs_direction_id": "0",
       "color": "#ff4466",
       "file": "circuits/66N.json",
-      "n_trips": 5
+      "n_trips": 10
     },
     {
       "line_id": "66S",
       "gtfs_direction_id": "1",
       "color": "#cc1133",
       "file": "circuits/66S.json",
-      "n_trips": 5
+      "n_trips": 9
+    },
+    {
+      "line_id": "71N",
+      "gtfs_direction_id": "1",
+      "color": "#bb7755",
+      "file": "circuits/71N.json",
+      "n_trips": 9
+    },
+    {
+      "line_id": "71S",
+      "gtfs_direction_id": "0",
+      "color": "#885533",
+      "file": "circuits/71S.json",
+      "n_trips": 9
     }
   ]
 }

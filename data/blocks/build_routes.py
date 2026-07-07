@@ -18,10 +18,11 @@ CACHE_DIR  = Path(__file__).parent.parent / "cache" / "gtfs"
 OUTPUT     = Path(__file__).parent.parent.parent / "web" / "data" / "routes_stm.json"
 
 # ── Lignes cibles (route_short_name dans le GTFS STM) ──────────────────────
-# 138/104/119/71 : candidates au Cas 7 (choix de remplacement) — à élaguer si
-# elles ne produisent aucun trajet compétitif pour le corridor 51∩66 → 480∩144.
-TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480", "103", "24",
-                 "138", "104", "119", "71"}
+# Note : 138/104/119/71 ont été testées comme candidates au Cas 7 puis retirées —
+# leur arrêt le plus proche du corridor 51∩66 → 480∩144 est à ≥ 889 m (hors rayon
+# de marche 300 m), donc aucun trajet compétitif ; en prime elles gonflaient le
+# graphe de marche et faisaient échouer l'énumération. Vérifié empiriquement.
+TARGET_ROUTES = {"51", "11", "165", "129", "155", "66", "144", "124", "480", "103", "24"}
 
 # On exporte les DEUX directions (N et S) pour toutes les lignes.
 BIDIRECTIONAL = set(TARGET_ROUTES)
@@ -40,10 +41,6 @@ LINE_COLORS_HEX = {
     "480N": "#9900cc", "480S": "#6600aa",   # violet / mauve foncé
     "103N": "#ff6600", "103S": "#cc4400",   # orange-rouge
     "24N":  "#00ccaa", "24S":  "#009977",   # turquoise
-    "104N": "#ee2299", "104S": "#aa1166",   # magenta
-    "119N": "#aacc22", "119S": "#778811",   # olive
-    "138N": "#6655ff", "138S": "#3322cc",   # indigo
-    "71N":  "#bb7755", "71S":  "#885533",   # terracotta
 }
 
 LAT_M = 111_000.0

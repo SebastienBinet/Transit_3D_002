@@ -78,35 +78,42 @@ export function setJourneyHighlight(tripIds) {
 // ── Flux de bonhommes de surlignage (Cas 7) ───────────────────────────────
 // Un choix survolé/sélectionné anime un flux de bonhommes le long de son trajet,
 // en TEMPS MACHINE (mur d'horloge), indépendant de play/pause et de la vitesse
-// sim ×N. Deux modes : 'spacetime' (montent l'axe du temps sur la trajectoire 3D)
-// ou 'ground' (au sol, sur le tracé géographique).
-const streamSprites = [];           // pool de Three.Sprite
+// sim ×N. Trois modes : 'spacetime' (montent l'axe du temps sur la trajectoire
+// 3D), 'ground' (au sol, sur le tracé géographique) ou 'both' (les deux + une
+// ligne verticale reliant chaque paire sol↔espace-temps).
+const STREAM_CAP = 150;             // nb max de bonhommes affichés
+const streamFigures = [];           // pool de { ground:Sprite, sky:Sprite, line:Line }
 let _streamPath = null;             // { startS, endS, durationS, sampleAbs } | null
-let _streamMode = 'spacetime';      // 'spacetime' | 'ground'
-let _streamSpacingS = 300;          // espacement des bonhommes en temps-trajet (s)
+let _streamMode = 'ground';         // 'spacetime' | 'ground' | 'both'
+let _streamSpacingS = 1;            // espacement des bonhommes en temps-trajet (s)
 let _streamSpeedMul = 100;          // vitesse machine : temps-trajet / temps-mur
 
 // Fixe (ou efface) le trajet à animer. path = échantillonneur getChoicePath.
 export function setHighlightStream(path) { _streamPath = path ?? null; }
 export function setStreamParams({ mode, spacingS, speedMul } = {}) {
     if (mode != null)     _streamMode = mode;
-    if (spacingS != null) _streamSpacingS = Math.max(10, spacingS);
+    if (spacingS != null) _streamSpacingS = Math.max(1, spacingS);
     if (speedMul != null) _streamSpeedMul = Math.max(1, speedMul);
 }
 
-function ensureStreamSprites(n) {
-    while (streamSprites.length < n) {
-        const s = makePersonSprite(0xffee66);   // couleur du surlignage (jaune usager)
-        s.scale.set(150, 225, 1);
-        s.visible = false;
-        scene.add(s);
-        streamSprites.push(s);
+function ensureStreamFigures(n) {
+    while (streamFigures.length < n) {
+        const mk = () => { const s = makePersonSprite(0xffee66); s.scale.set(150, 225, 1); s.visible = false; scene.add(s); return s; };
+        const lgeo = new THREE.BufferGeometry();
+        lgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+        const line = new THREE.Line(lgeo, new THREE.LineBasicMaterial({ color: 0xffee66, transparent: true, opacity: 0.35 }));
+        line.visible = false;
+        scene.add(line);
+        streamFigures.push({ ground: mk(), sky: mk(), line });
     }
 }
 
 function clearStreamSprites() {
-    for (const s of streamSprites) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
-    streamSprites.length = 0;
+    for (const f of streamFigures) {
+        for (const s of [f.ground, f.sky]) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
+        scene?.remove(f.line); f.line.geometry.dispose(); f.line.material.dispose();
+    }
+    streamFigures.length = 0;
     _streamPath = null;
 }
 
@@ -580,27 +587,35 @@ export function init(canvas, config) {
         // play/pause et de la vitesse sim. Bonhommes espacés de _streamSpacingS en
         // temps-trajet, avançant à _streamSpeedMul × le temps mur, en boucle.
         if (_streamPath && _streamPath.durationS > 0) {
-            const dur = _streamPath.durationS;
-            const nFig = Math.min(60, Math.max(2, Math.ceil(dur / _streamSpacingS)));
-            ensureStreamSprites(nFig);
-            const tau = (now / 1000) * _streamSpeedMul;   // temps-trajet parcouru (s)
-            const FEET_Y = 118 * (150 / 180);             // même offset pieds, échelle réduite
-            for (let i = 0; i < streamSprites.length; i++) {
-                const sprite = streamSprites[i];
-                if (i >= nFig) { sprite.visible = false; continue; }
+            const dur   = _streamPath.durationS;
+            const nFig  = Math.min(STREAM_CAP, Math.max(2, Math.ceil(dur / _streamSpacingS)));
+            ensureStreamFigures(nFig);
+            const tau      = (now / 1000) * _streamSpeedMul;   // temps-trajet parcouru (s)
+            const FEET_Y   = 118 * (150 / 180);                // offset pieds, échelle réduite
+            const showG    = _streamMode === 'ground' || _streamMode === 'both';
+            const showS    = _streamMode === 'spacetime' || _streamMode === 'both';
+            const showLine = _streamMode === 'both';
+            for (let i = 0; i < streamFigures.length; i++) {
+                const f = streamFigures[i];
+                if (i >= nFig) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
                 const tRel = ((tau + i * _streamSpacingS) % dur + dur) % dur;
                 const tAbs = _streamPath.startS + tRel;
-                const pos = _streamPath.sampleAbs(tAbs);
-                if (!pos) { sprite.visible = false; continue; }
-                const base = geoPos(pos.lat, pos.lon);
-                const y = _streamMode === 'spacetime'
-                    ? (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y
-                    : FEET_Y;
-                sprite.position.set(base.x, y, base.z);
-                sprite.visible = true;
+                const pos  = _streamPath.sampleAbs(tAbs);
+                if (!pos) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
+                const base  = geoPos(pos.lat, pos.lon);
+                const skyY  = (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y;
+                f.ground.visible = showG; if (showG) f.ground.position.set(base.x, FEET_Y, base.z);
+                f.sky.visible    = showS; if (showS) f.sky.position.set(base.x, skyY, base.z);
+                f.line.visible   = showLine;
+                if (showLine) {
+                    const p = f.line.geometry.attributes.position;
+                    p.setXYZ(0, base.x, FEET_Y, base.z);
+                    p.setXYZ(1, base.x, skyY, base.z);
+                    p.needsUpdate = true;
+                }
             }
-        } else if (streamSprites.length) {
-            for (const s of streamSprites) s.visible = false;
+        } else if (streamFigures.length) {
+            for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
         }
 
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N

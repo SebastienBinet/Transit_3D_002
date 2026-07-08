@@ -129,6 +129,25 @@
 
   <div id="build-info">Sim : —<br>Visu : —</div>
 
+  <!-- Cas 7 : curseurs temporaires pour caler les constantes du flux de bonhommes -->
+  <div id="stream-controls" style="display:none; position:fixed; top:16px; right:130px; z-index:12;
+       background:rgba(0,0,0,0.72); padding:9px 12px; border-radius:8px; border:1px solid #446;
+       font-size:11px; color:#cdd; font-family:monospace; line-height:1.9;">
+    <div style="color:#ffdd66; font-weight:bold; margin-bottom:3px;">Flux surlignage (essai)</div>
+    <div>Mode
+      <select id="stream-mode" style="font-size:10px; padding:1px 3px;">
+        <option value="spacetime">Espace-temps</option>
+        <option value="ground">Au sol</option>
+      </select>
+    </div>
+    <div>Espacement <span id="stream-spacing-val">5</span> min<br>
+      <input id="stream-spacing" type="range" min="1" max="15" step="1" value="5" style="width:130px;">
+    </div>
+    <div>Vitesse ×<span id="stream-speed-val">100</span><br>
+      <input id="stream-speed" type="range" min="10" max="300" step="10" value="100" style="width:130px;">
+    </div>
+  </div>
+
   <div id="hud">
     <select id="scenario-select">
       <option value="1">Cas 1 — nominal</option>
@@ -167,7 +186,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -228,6 +247,8 @@
       if (journeyPanel) { journeyPanel.dispose(); journeyPanel = null; }
       choiceEngine = null;
       setJourneyHighlight(null);
+      setHighlightStream(null);
+      document.getElementById('stream-controls').style.display = 'none';
     }
 
     async function loadChoiceCase7() {
@@ -270,6 +291,7 @@
         timeGrid: { t0Seconds: t0, horizonS: playHorizonS / 2, bounds },
       });
 
+      document.getElementById('prob-display').style.display = 'none';   // hors récit (cas 1/2)
       const USER_COLOR = 0xffdd22;
       initPassengers(1, [USER_COLOR]);
       setPassengerT0(t0);
@@ -278,12 +300,30 @@
         ...choiceEngine.getPassenger(tAbs),
       }]);
 
+      // Surlignage : le choix survolé (ou engagé) éclaire son trajet en 3D —
+      // ses bus restent nets, les autres s'estompent — et anime un flux de
+      // bonhommes le long du trajet (temps machine). Voir les curseurs du HUD.
+      function applyHighlight(choice) {
+        const path = choice ? choiceEngine.getChoicePath(choice) : null;
+        setJourneyHighlight(path ? path.tripIds : null);
+        setHighlightStream(path);
+        update();   // reflète l'estompage même en pause
+      }
+
       journeyPanel = createChoicePanel({
         container: document.getElementById('legend'),
         engine: choiceEngine,
         t0,
-        onCommit: tripIds => setJourneyHighlight(tripIds),
+        onHighlightChoice: applyHighlight,
       });
+
+      // Paramètres initiaux du flux depuis les curseurs temporaires
+      setStreamParams({
+        mode: document.getElementById('stream-mode').value,
+        spacingS: Number(document.getElementById('stream-spacing').value) * 60,
+        speedMul: Number(document.getElementById('stream-speed').value),
+      });
+      document.getElementById('stream-controls').style.display = '';
 
       player = model;
       player.setSpeed(Number(document.getElementById('speed-select').value));
@@ -570,8 +610,21 @@
         choiceEngine.reset();
         journeyPanel?.reset?.();
         setJourneyHighlight(null);
+        setHighlightStream(null);
       }
       update();
+    };
+
+    // Cas 7 : curseurs temporaires du flux de bonhommes de surlignage
+    document.getElementById('stream-mode').onchange = e =>
+      setStreamParams({ mode: e.target.value });
+    document.getElementById('stream-spacing').oninput = e => {
+      document.getElementById('stream-spacing-val').textContent = e.target.value;
+      setStreamParams({ spacingS: Number(e.target.value) * 60 });
+    };
+    document.getElementById('stream-speed').oninput = e => {
+      document.getElementById('stream-speed-val').textContent = e.target.value;
+      setStreamParams({ speedMul: Number(e.target.value) });
     };
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));

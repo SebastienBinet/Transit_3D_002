@@ -75,12 +75,48 @@ export function setJourneyHighlight(tripIds) {
     _highlightedJourneyTripIds = tripIds ? new Set(tripIds) : null;
 }
 
+// ── Flux de bonhommes de surlignage (Cas 7) ───────────────────────────────
+// Un choix survolé/sélectionné anime un flux de bonhommes le long de son trajet,
+// en TEMPS MACHINE (mur d'horloge), indépendant de play/pause et de la vitesse
+// sim ×N. Deux modes : 'spacetime' (montent l'axe du temps sur la trajectoire 3D)
+// ou 'ground' (au sol, sur le tracé géographique).
+const streamSprites = [];           // pool de Three.Sprite
+let _streamPath = null;             // { startS, endS, durationS, sampleAbs } | null
+let _streamMode = 'spacetime';      // 'spacetime' | 'ground'
+let _streamSpacingS = 300;          // espacement des bonhommes en temps-trajet (s)
+let _streamSpeedMul = 100;          // vitesse machine : temps-trajet / temps-mur
+
+// Fixe (ou efface) le trajet à animer. path = échantillonneur getChoicePath.
+export function setHighlightStream(path) { _streamPath = path ?? null; }
+export function setStreamParams({ mode, spacingS, speedMul } = {}) {
+    if (mode != null)     _streamMode = mode;
+    if (spacingS != null) _streamSpacingS = Math.max(10, spacingS);
+    if (speedMul != null) _streamSpeedMul = Math.max(1, speedMul);
+}
+
+function ensureStreamSprites(n) {
+    while (streamSprites.length < n) {
+        const s = makePersonSprite(0xffee66);   // couleur du surlignage (jaune usager)
+        s.scale.set(150, 225, 1);
+        s.visible = false;
+        scene.add(s);
+        streamSprites.push(s);
+    }
+}
+
+function clearStreamSprites() {
+    for (const s of streamSprites) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
+    streamSprites.length = 0;
+    _streamPath = null;
+}
+
 function clearPassengers() {
     for (const s of passengerSprites) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
     passengerSprites.length = 0;
     _getPassengerPositions = null;
     _t0ForPassengers = 0;
     _highlightedJourneyTripIds = null;
+    clearStreamSprites();
 }
 
 // Affichage du ruban d'incertitude p10–p90. Décoché par défaut (lecture allégée).
@@ -540,6 +576,33 @@ export function init(canvas, config) {
             }
         }
 
+        // Flux de bonhommes de surlignage — TEMPS MACHINE (mur), indépendant de
+        // play/pause et de la vitesse sim. Bonhommes espacés de _streamSpacingS en
+        // temps-trajet, avançant à _streamSpeedMul × le temps mur, en boucle.
+        if (_streamPath && _streamPath.durationS > 0) {
+            const dur = _streamPath.durationS;
+            const nFig = Math.min(60, Math.max(2, Math.ceil(dur / _streamSpacingS)));
+            ensureStreamSprites(nFig);
+            const tau = (now / 1000) * _streamSpeedMul;   // temps-trajet parcouru (s)
+            const FEET_Y = 118 * (150 / 180);             // même offset pieds, échelle réduite
+            for (let i = 0; i < streamSprites.length; i++) {
+                const sprite = streamSprites[i];
+                if (i >= nFig) { sprite.visible = false; continue; }
+                const tRel = ((tau + i * _streamSpacingS) % dur + dur) % dur;
+                const tAbs = _streamPath.startS + tRel;
+                const pos = _streamPath.sampleAbs(tAbs);
+                if (!pos) { sprite.visible = false; continue; }
+                const base = geoPos(pos.lat, pos.lon);
+                const y = _streamMode === 'spacetime'
+                    ? (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y
+                    : FEET_Y;
+                sprite.position.set(base.x, y, base.z);
+                sprite.visible = true;
+            }
+        } else if (streamSprites.length) {
+            for (const s of streamSprites) s.visible = false;
+        }
+
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N
         const realTime = now / 1000;
         for (const { handle, urgencyFn } of animatedFlags) {
@@ -642,7 +705,9 @@ function drawFrame(frame, routes) {
     function vehicleStyle(vid) {
         if (isJourneyMode) {
             const inHighlight = _highlightedJourneyTripIds === null || _highlightedJourneyTripIds.has(vid);
-            if (!inHighlight) return { lineOp: 0.10, bandOp: 0.03, bold: false };
+            // Choix surligné (Cas 7) : les autres bus s'effacent fortement pour
+            // laisser le trajet du choix ressortir (« surtout réduire les autres »).
+            if (!inHighlight) return { lineOp: 0.035, bandOp: 0.0, bold: false };
             if (activeTripIds.has(vid))  return { lineOp: 1.0,  bandOp: 0.35, bold: true };
             if (plannedTripIds.has(vid)) return { lineOp: 0.60, bandOp: 0.20, bold: false };
             return { lineOp: 0.25, bandOp: 0.08, bold: false };

@@ -47,7 +47,7 @@ function strokeLabel(ctx, text, x, y, fill, lw = 3) {
     ctx.restore();
 }
 
-export function createChoicePanel({ container, engine, t0, onCommit }) {
+export function createChoicePanel({ container, engine, t0, onCommit, onHighlightChoice }) {
     let pinned = false, collapsed = false;
     let bandsCvs = null, bandsCtx = null, cdfCvs = null, cdfCtx = null;
     let statusEl = null, contentDiv = null;
@@ -161,7 +161,27 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
     function setHover(id) {
         if (hoveredId === id) return;
         hoveredId = id;
+        emitHighlight();
         redraw();   // reflète immédiatement, même en pause
+    }
+
+    // Choix effectivement mis en évidence : le survolé s'il y en a un, sinon
+    // le choix engagé (sélection persistante), sinon rien.
+    function effectiveChoice() {
+        if (hoveredId != null) {
+            const col = cols.find(c => c.id === hoveredId);
+            if (col && col.state === 'live') return col.choice;
+        }
+        const committed = cols.find(c => c.choice.committed);
+        return committed ? committed.choice : null;
+    }
+    let _lastEmitId = undefined;
+    function emitHighlight() {
+        const ch = effectiveChoice();
+        const id = ch ? ch.id : null;
+        if (id === _lastEmitId) return;   // éviter les ré-émissions inutiles
+        _lastEmitId = id;
+        onHighlightChoice?.(ch);
     }
 
     // Multiplicateur d'opacité de survol : la colonne survolée reste pleine,
@@ -176,7 +196,10 @@ export function createChoicePanel({ container, engine, t0, onCommit }) {
         const tAbs = t0 + lastSimTime;
         if (engine.commit(col.id, tAbs)) {
             col.commitS = tAbs;
+            col.choice = engine.getChoices(tAbs).find(c => c.id === col.id) ?? col.choice;
             onCommit?.(engine.getPlanTripIds());
+            _lastEmitId = undefined;   // forcer la ré-émission (la sélection a changé)
+            emitHighlight();
         }
     }
 

@@ -84,13 +84,20 @@ export function setJourneyHighlight(tripIds) {
 const STREAM_CAP = 150;             // nb max de bonhommes affichés
 const streamFigures = [];           // pool de { ground:Sprite, sky:Sprite, line:Line }
 const streamGlows = [];             // halos aux arrêts (attente) — 1 par grappe
-let _streamPath = null;             // { startS, endS, durationS, sampleAbs } | null
+let _streamReals = null;            // [{prob, path, cum}] | null — réalisations du choix
 let _streamMode = 'ground';         // 'spacetime' | 'ground' | 'both'
 let _streamSpacingS = 1;            // espacement des bonhommes en temps-trajet (s)
 let _streamSpeedMul = 100;          // vitesse machine : temps-trajet / temps-mur
 
-// Fixe (ou efface) le trajet à animer. path = échantillonneur getChoicePath.
-export function setHighlightStream(path) { _streamPath = path ?? null; }
+// Fixe (ou efface) les RÉALISATIONS à animer : [{prob, path}] (item 4). Chaque
+// bonhomme est réparti sur une réalisation selon sa probabilité → le paquet se
+// scinde aux correspondances risquées. Un simple trajet = une réalisation prob 1.
+export function setHighlightStream(reals) {
+    if (!reals || !reals.length) { _streamReals = null; return; }
+    let c = 0;
+    _streamReals = reals.filter(r => r.path).map(r => { c += r.prob; return { prob: r.prob, path: r.path, cum: c }; });
+    if (!_streamReals.length) _streamReals = null;
+}
 export function setStreamParams({ mode, spacingS, speedMul } = {}) {
     if (mode != null)     _streamMode = mode;
     if (spacingS != null) _streamSpacingS = Math.max(1, spacingS);
@@ -132,7 +139,7 @@ function clearStreamSprites() {
     for (const g of streamGlows) { scene?.remove(g); g.material.map?.dispose(); g.material.dispose(); }
     streamFigures.length = 0;
     streamGlows.length = 0;
-    _streamPath = null;
+    _streamReals = null;
 }
 
 function clearPassengers() {
@@ -604,9 +611,9 @@ export function init(canvas, config) {
         // Flux de bonhommes de surlignage — TEMPS MACHINE (mur), indépendant de
         // play/pause et de la vitesse sim. Bonhommes espacés de _streamSpacingS en
         // temps-trajet, avançant à _streamSpeedMul × le temps mur, en boucle.
-        if (_streamPath && _streamPath.durationS > 0) {
-            const dur   = _streamPath.durationS;
-            const nFig  = Math.min(STREAM_CAP, Math.max(2, Math.ceil(dur / _streamSpacingS)));
+        if (_streamReals) {
+            const maxDur = Math.max(..._streamReals.map(r => r.path.durationS));
+            const nFig   = Math.min(STREAM_CAP, Math.max(2, Math.ceil(maxDur / _streamSpacingS)));
             ensureStreamFigures(nFig);
             const tau      = (now / 1000) * _streamSpeedMul;   // temps-trajet parcouru (s)
             const FEET_Y   = 118 * (150 / 180);                // offset pieds, échelle réduite
@@ -615,14 +622,19 @@ export function init(canvas, config) {
             const showS    = _streamMode === 'spacetime' || _streamMode === 'both';
             const showLine = _streamMode === 'both';
 
-            // Passe 1 : positions de chaque bonhomme (+ phase)
+            // Passe 1 : positions de chaque bonhomme (+ phase). Chaque bonhomme est
+            // affecté à une réalisation par suite bas-discrépance (répartition ≈
+            // proportionnelle aux probabilités) → le paquet se scinde aux transferts.
             const data = [];
             for (let i = 0; i < streamFigures.length; i++) {
                 const f = streamFigures[i];
-                if (i >= nFig) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
+                const u = (i * 0.6180339887498949) % 1;
+                const real = i < nFig ? _streamReals.find(r => u < r.cum) : null;
+                if (!real) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
+                const dur  = real.path.durationS;
                 const tRel = ((tau + i * _streamSpacingS) % dur + dur) % dur;
-                const tAbs = _streamPath.startS + tRel;
-                const pos  = _streamPath.sampleAbs(tAbs);
+                const tAbs = real.path.startS + tRel;
+                const pos  = real.path.sampleAbs(tAbs);
                 if (!pos) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
                 const base = geoPos(pos.lat, pos.lon);
                 const skyY = (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y;

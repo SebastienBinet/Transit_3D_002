@@ -305,9 +305,12 @@
       // ses bus restent nets, les autres s'estompent — et anime un flux de
       // bonhommes le long du trajet (temps machine). Voir les curseurs du HUD.
       function applyHighlight(choice) {
-        const path = choice ? choiceEngine.getChoicePath(choice) : null;
-        setJourneyHighlight(path ? path.tripIds : null);
-        setHighlightStream(path);
+        const tAbs = t0 + (player?.simTime ?? 0);
+        const reals = choice ? choiceEngine.getChoiceRealizations(choice, tAbs) : null;
+        // Estompage 3D : tous les bus de toutes les réalisations (chemin engagé + replis)
+        const trips = reals ? [...new Set(reals.flatMap(r => r.path.tripIds))] : null;
+        setJourneyHighlight(trips);
+        setHighlightStream(reals);
         update();   // reflète l'estompage même en pause
       }
 

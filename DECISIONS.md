@@ -238,3 +238,40 @@ constantes nommées, pas d'astuce navigateur. Le modèle de probabilité (σ d'�
 P(transfert), CDF) y est réimplémenté paramétriquement ; la copie interne de
 journey-panel.js (Cas 6) est conservée telle quelle — le moteur fait foi pour le
 portage. `web/js/choice-panel.js` (DOM/Canvas) ne fait que dessiner.
+
+---
+
+## 15. Dette technique connue
+
+Liste des compromis assumés, à revisiter selon les déclencheurs indiqués.
+
+### 15.1 Coût de la recherche du moteur de choix (Cas 7)
+
+**Constat.** `web/js/choice-engine.js` énumère la faisabilité par un Dijkstra
+temporel. Le nombre d'états explosé combinatoirement à cause de la règle « au
+plus une ligne par numéro » : un même arrêt est atteignable via de nombreux
+SOUS-ENSEMBLES de lignes, chacun étant un état distinct. La recherche atteint
+donc son garde-fou (`MAX_SETTLES`) à *chaque* appel.
+
+**État actuel (mitigation, pas correction).** `MAX_SETTLES = 50_000` (compte
+d'états, volontairement déterministe — pas un budget en secondes qui varierait
+selon le CPU et figerait l'UI). Couvre la fenêtre du scénario (départ 7h00 →
+~8h00) avec marge, ~480 ms au pire par énumération (peu fréquent : cache
+événementiel). Au-delà de ~8h00 avec les données actuelles, la 1re complétion
+tombe au-delà du garde-fou → 0 choix.
+
+**Surveillance en place.** `engine.lastSearchStats` + `console.warn` quand une
+recherche est coupée sans complétion ; test L3 « garde-fou » ; barrière dans
+`data-sync.yml` (tests L3 avant commit/déploiement). Une régression de données
+qui repousse la 1re complétion échoue donc en CI, pas en silence.
+
+**Pistes de correction (non faites).** Ce qui a été TESTÉ sans effet : réduire
+l'horizon temporel (`maxJourneyS`), filtre géographique de couloir (ellipse) —
+la borne vient de la dimension « sous-ensemble de lignes », pas de l'espace ni
+du temps. Vrais remèdes : recherche **dirigée A\*** vers la destination
+(heuristique admissible = distance à vol d'oiseau / vitesse bus max) ; et/ou
+**plafond de correspondances** (2–3 bus) bornant la profondeur ; et/ou revoir la
+clé d'état pour ne pas multiplier par les sous-ensembles de lignes.
+
+**Déclencheur.** À attaquer si on élargit à un corridor plus dense/plus long, à
+plusieurs corridors, ou si la latence d'énumération devient gênante en lecture.

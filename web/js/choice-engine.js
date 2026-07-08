@@ -349,7 +349,20 @@ export function createChoiceEngine({
         const bestAt = new Map();        // "stop|used|lastTrip" → t
         const completed = new Map();     // "tripIds…" (+meta key) → complétion
         const deadline = tNow + maxJourneyS;
-        const MAX_SETTLES = 30_000;      // garde-fou (cas sans complétion possible)
+        // Garde-fou : borne le nombre d'états explorés (extractions du tas). C'est
+        // un COMPTE, pas un temps — volontairement déterministe (même résultat sur
+        // toute machine ; un budget en secondes donnerait des résultats différents
+        // selon la vitesse du CPU et figerait l'UI, à proscrire). Cause profonde du
+        // besoin d'un tel volume : la règle « une ligne par numéro au plus » rend
+        // chaque arrêt atteignable via de nombreux SOUS-ENSEMBLES de lignes →
+        // explosion combinatoire d'états. 50 000 couvre la fenêtre du scénario
+        // (départ 7h00 → ~8h00) avec marge ; au-delà, la latence monte (~480 ms au
+        // pire). Le vrai remède pour un corridor plus dense serait une recherche
+        // dirigée (A* vers la destination) ou un plafond de correspondances — à
+        // faire si on élargit. La santé est surveillée (lastSearchStats + warn) et
+        // testée (test_choice_engine « garde-fou ») ; une régression de données qui
+        // repousse la 1re complétion au-delà échoue en CI, pas en silence.
+        const MAX_SETTLES = 50_000;
         let worstCache = null;
         let settles = 0;
 
@@ -426,6 +439,19 @@ export function createChoiceEngine({
                 }
             }
         }
+
+        // Observabilité du garde-fou : on enregistre l'état de CETTE recherche.
+        // hitCap = la recherche a été coupée à MAX_SETTLES (exploration incomplète).
+        // Le cas dangereux est hitCap AVEC 0 complétion : coupé avant de trouver
+        // le moindre trajet → risque de « 0 choix » silencieux (régression de données).
+        const hitCap = settles > MAX_SETTLES;
+        lastSearchStats = { settles, maxSettles: MAX_SETTLES, hitCap,
+                            nCompletions: completed.size };
+        if (hitCap && completed.size === 0) {
+            console.warn('[choice-engine] recherche coupée au garde-fou '
+                + `(${MAX_SETTLES} états explorés) SANS trajet trouvé — données trop `
+                + 'denses pour ce corridor, ou destination inatteignable.');
+        }
         return [...completed.values()];
     }
 
@@ -473,6 +499,7 @@ export function createChoiceEngine({
     let plan = [];
     let committedId = null;
     let cache = null;   // { tAt, validUntil, choices }
+    let lastSearchStats = null;   // santé de la dernière recherche (garde-fou)
 
     function invalidate() { cache = null; }
 
@@ -864,5 +891,8 @@ export function createChoiceEngine({
         getPassenger,
         getPlanTripIds,
         get committedId() { return committedId; },
+        // Santé de la dernière recherche Dijkstra : { settles, maxSettles, hitCap,
+        // nCompletions }. Sert au diagnostic (console) et aux tests de non-régression.
+        get lastSearchStats() { return lastSearchStats; },
     };
 }

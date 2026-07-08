@@ -59,9 +59,22 @@ jobs:
           echo "===== build_scenario_stm.py ====="  && cat /tmp/scenario.log
           exit $rc
 
-      - name: Valider les sorties (tests L2)
+      - name: Valider les sorties (tests L2 schéma)
         run: uv run pytest tests/level2/ -v -k "stm" --no-header || true
         # --no-header et || true : les tests L2 STM seront ajoutés progressivement
+
+      # Barrière : les tests L3 rejouent le moteur de choix (Cas 7) contre les
+      # données FRAÎCHEMENT régénérées. Si une régénération casse l'énumération
+      # (ex. corridor trop dense → recherche coupée au garde-fou → 0 choix), on
+      # ÉCHOUE ici, AVANT de committer/déployer. Sans ça, le push du bot ne
+      # déclenche pas ci.yml (anti-boucle) et des données cassées partiraient en
+      # prod inaperçues — exactement ce qui est arrivé avec 138/104/119/71.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Valider le moteur de choix contre les données (tests L3)
+        run: node --test tests/level3/*.mjs
 
       - name: Committer et pousser les données mises à jour
         run: |

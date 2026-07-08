@@ -969,6 +969,8 @@ export function createChoiceEngine({
         segs.push({ t0: last.arr, t1: egEnd, kind: 'walk', p0: ll(last.ga), p1: destination });
         const endS = egEnd;
 
+        // Retourne { lat, lon, phase:'walk'|'wait'|'bus' } — le phase sert au
+        // rendu (empiler les bonhommes en attente à un arrêt).
         function sampleAbs(tAbs) {
             const t = Math.max(startS + 1e-3, Math.min(endS - 1e-3, tAbs));
             for (const s of segs) {
@@ -977,11 +979,12 @@ export function createChoiceEngine({
                     const trip = tripById.get(s.tripId);
                     const geom = lineGeom.get(s.lineId);
                     if (!trip || !geom) return null;
-                    return progressToLatLon(schedOf(trip)(t), geom.shape);
+                    const ll = progressToLatLon(schedOf(trip)(t), geom.shape);
+                    return ll ? { lat: ll.lat, lon: ll.lon, phase: 'bus' } : null;
                 }
                 const r = (t - s.t0) / Math.max(1e-9, s.t1 - s.t0);
                 return { lat: s.p0.lat + r * (s.p1.lat - s.p0.lat),
-                         lon: s.p0.lon + r * (s.p1.lon - s.p0.lon) };
+                         lon: s.p0.lon + r * (s.p1.lon - s.p0.lon), phase: s.kind };
             }
             return null;
         }

@@ -83,6 +83,7 @@ export function setJourneyHighlight(tripIds) {
 // ligne verticale reliant chaque paire sol↔espace-temps).
 const STREAM_CAP = 150;             // nb max de bonhommes affichés
 const streamFigures = [];           // pool de { ground:Sprite, sky:Sprite, line:Line }
+const streamGlows = [];             // halos aux arrêts (attente) — 1 par grappe
 let _streamPath = null;             // { startS, endS, durationS, sampleAbs } | null
 let _streamMode = 'ground';         // 'spacetime' | 'ground' | 'both'
 let _streamSpacingS = 1;            // espacement des bonhommes en temps-trajet (s)
@@ -108,12 +109,29 @@ function ensureStreamFigures(n) {
     }
 }
 
+function makeGlowSprite() {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,238,102,0.95)');
+    g.addColorStop(0.5, 'rgba(255,220,60,0.35)');
+    g.addColorStop(1, 'rgba(255,220,60,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+    const mat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c),
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const s = new THREE.Sprite(mat); s.visible = false; scene.add(s);
+    return s;
+}
+function ensureStreamGlows(n) { while (streamGlows.length < n) streamGlows.push(makeGlowSprite()); }
+
 function clearStreamSprites() {
     for (const f of streamFigures) {
         for (const s of [f.ground, f.sky]) { scene?.remove(s); s.material.map?.dispose(); s.material.dispose(); }
         scene?.remove(f.line); f.line.geometry.dispose(); f.line.material.dispose();
     }
+    for (const g of streamGlows) { scene?.remove(g); g.material.map?.dispose(); g.material.dispose(); }
     streamFigures.length = 0;
+    streamGlows.length = 0;
     _streamPath = null;
 }
 
@@ -592,9 +610,13 @@ export function init(canvas, config) {
             ensureStreamFigures(nFig);
             const tau      = (now / 1000) * _streamSpeedMul;   // temps-trajet parcouru (s)
             const FEET_Y   = 118 * (150 / 180);                // offset pieds, échelle réduite
+            const STACK_STEP = 42;                             // empilement léger à l'attente
             const showG    = _streamMode === 'ground' || _streamMode === 'both';
             const showS    = _streamMode === 'spacetime' || _streamMode === 'both';
             const showLine = _streamMode === 'both';
+
+            // Passe 1 : positions de chaque bonhomme (+ phase)
+            const data = [];
             for (let i = 0; i < streamFigures.length; i++) {
                 const f = streamFigures[i];
                 if (i >= nFig) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
@@ -602,20 +624,58 @@ export function init(canvas, config) {
                 const tAbs = _streamPath.startS + tRel;
                 const pos  = _streamPath.sampleAbs(tAbs);
                 if (!pos) { f.ground.visible = f.sky.visible = f.line.visible = false; continue; }
-                const base  = geoPos(pos.lat, pos.lon);
-                const skyY  = (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y;
-                f.ground.visible = showG; if (showG) f.ground.position.set(base.x, FEET_Y, base.z);
-                f.sky.visible    = showS; if (showS) f.sky.position.set(base.x, skyY, base.z);
-                f.line.visible   = showLine;
+                const base = geoPos(pos.lat, pos.lon);
+                const skyY = (tAbs - _t0ForPassengers - currentSimTime) * TIME_SCALE + FEET_Y;
+                data.push({ f, x: base.x, z: base.z, skyY, phase: pos.phase, tRel });
+            }
+
+            // Passe 2 : grappes d'ATTENTE (même arrêt) → rang d'empilement + halo.
+            // Nb de bonhommes empilés ∝ durée d'attente (à espacement fixe) → la
+            // hauteur de la colonne et l'intensité (log) du halo rendent l'attente.
+            const clusters = new Map();
+            for (const d of data) {
+                if (d.phase !== 'wait') continue;
+                const key = Math.round(d.x / 6) + ',' + Math.round(d.z / 6);
+                if (!clusters.has(key)) clusters.set(key, []);
+                clusters.get(key).push(d);
+            }
+            const rankOf = new Map();
+            for (const items of clusters.values()) {
+                items.sort((a, b) => a.tRel - b.tRel);
+                items.forEach((d, k) => rankOf.set(d, k));
+            }
+
+            // Passe 3 : placer sol / espace-temps / ligne
+            for (const d of data) {
+                const k  = rankOf.get(d) ?? 0;
+                const gY = FEET_Y + (d.phase === 'wait' ? k * STACK_STEP : 0);
+                d.f.ground.visible = showG; if (showG) d.f.ground.position.set(d.x, gY, d.z);
+                d.f.sky.visible    = showS; if (showS) d.f.sky.position.set(d.x, d.skyY, d.z);
+                d.f.line.visible   = showLine;
                 if (showLine) {
-                    const p = f.line.geometry.attributes.position;
-                    p.setXYZ(0, base.x, FEET_Y, base.z);
-                    p.setXYZ(1, base.x, skyY, base.z);
+                    const p = d.f.line.geometry.attributes.position;
+                    p.setXYZ(0, d.x, gY, d.z); p.setXYZ(1, d.x, d.skyY, d.z);
                     p.needsUpdate = true;
                 }
             }
+
+            // Passe 4 : halo par grappe d'attente (intensité logarithmique)
+            ensureStreamGlows(clusters.size);
+            let ci = 0;
+            for (const items of clusters.values()) {
+                const g = streamGlows[ci++]; const N = items.length; const inten = Math.log(N + 1);
+                const d0 = items[0];
+                const gy = showG ? FEET_Y : items.reduce((s, it) => s + it.skyY, 0) / N;
+                g.visible = true;
+                g.material.opacity = Math.min(0.85, 0.18 * inten);
+                const sz = 130 + 90 * inten;
+                g.scale.set(sz, sz, 1);
+                g.position.set(d0.x, gy, d0.z);
+            }
+            for (; ci < streamGlows.length; ci++) streamGlows[ci].visible = false;
         } else if (streamFigures.length) {
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
+            for (const g of streamGlows) g.visible = false;
         }
 
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N

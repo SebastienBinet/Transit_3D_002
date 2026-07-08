@@ -232,6 +232,7 @@ export function createChoiceEngine({
     }
 
     const tripByIdx = trips;
+    const tripById = new Map(trips.map(t => [t.tripId, t]));
     const tripStarts = {};
     for (const t of trips) tripStarts[t.tripId] = t.tFirst;
     const evSig = makeEventSigmas(sigmaFn, tripStarts);
@@ -879,6 +880,58 @@ export function createChoiceEngine({
         return cdfFromArrivalDist(leaves, nowAbs, evSig, tPlateau);
     }
 
+    // Échantillonneur espace-temps du trajet d'un choix : pour le flux de
+    // bonhommes de surlignage (Cas 7). Retourne { startS, endS, durationS,
+    // tripIds, sampleAbs(tAbs) → {lat, lon} } où tAbs est en sec depuis minuit.
+    // Le trajet couvre origine → (marche) → bus → (correspondances) → destination.
+    function getChoicePath(choice) {
+        const sp = choice?.spine;
+        if (!sp || !sp.hops.length) return null;
+        const ll = g => ({ lat: stops[g].lat, lon: stops[g].lon });
+        const segs = [];
+        const h0 = sp.hops[0];
+        let startS;
+        if (choice.kind === 'board') {
+            startS = h0.dep - (choice.walkS ?? 0);
+            segs.push({ t0: startS, t1: h0.dep, kind: 'walk', p0: origin, p1: ll(h0.gb) });
+        } else {
+            startS = h0.dep;   // à bord : le flux part de l'embarquement du bus courant
+        }
+        for (let i = 0; i < sp.hops.length; i++) {
+            const h = sp.hops[i];
+            segs.push({ t0: h.dep, t1: h.arr, kind: 'bus', lineId: h.lineId, tripId: h.tripId });
+            if (i < sp.hops.length - 1) {
+                const nx = sp.hops[i + 1];
+                const wEnd = h.arr + (nx.walkS ?? 0);
+                segs.push({ t0: h.arr, t1: wEnd, kind: 'walk', p0: ll(h.ga), p1: ll(nx.gb) });
+                if (nx.dep > wEnd) segs.push({ t0: wEnd, t1: nx.dep, kind: 'wait', p0: ll(nx.gb), p1: ll(nx.gb) });
+            }
+        }
+        const last = sp.hops[sp.hops.length - 1];
+        const egEnd = last.arr + (sp.egressWalkS ?? 0);
+        segs.push({ t0: last.arr, t1: egEnd, kind: 'walk', p0: ll(last.ga), p1: destination });
+        const endS = egEnd;
+
+        function sampleAbs(tAbs) {
+            const t = Math.max(startS + 1e-3, Math.min(endS - 1e-3, tAbs));
+            for (const s of segs) {
+                if (t < s.t0 || t > s.t1) continue;
+                if (s.kind === 'bus') {
+                    const trip = tripById.get(s.tripId);
+                    const geom = lineGeom.get(s.lineId);
+                    if (!trip || !geom) return null;
+                    return progressToLatLon(schedOf(trip)(t), geom.shape);
+                }
+                const r = (t - s.t0) / Math.max(1e-9, s.t1 - s.t0);
+                return { lat: s.p0.lat + r * (s.p1.lat - s.p0.lat),
+                         lon: s.p0.lon + r * (s.p1.lon - s.p0.lon) };
+            }
+            return null;
+        }
+        return { startS, endS, durationS: endS - startS,
+                 tripIds: sp.hops.map(h => h.tripId), sampleAbs };
+    }
+
     return {
         origin, destination, departS,
         tripStarts, sigmaFn, evSig,
@@ -887,6 +940,7 @@ export function createChoiceEngine({
         getChoices,
         commit,
         choiceCdf,
+        getChoicePath,
         getState: phaseAt,
         getPassenger,
         getPlanTripIds,

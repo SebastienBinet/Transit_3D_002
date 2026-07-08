@@ -345,7 +345,11 @@ export function createChoiceEngine({
     // usedInit : Set de numéros de ligne déjà empruntés (règle : au plus une fois).
     // Retourne [{arrivalS, legs, egressWalkS, meta}] ; legs = segments bus
     // {ti, tripId, lineId, base, boardStop, boardS, alightStop, alightS, fromWalkS}.
-    function search(seeds, usedInit, tNow) {
+    // Générateur : la boucle Dijkstra cède la main tous les YIELD_EVERY états
+    // explorés, pour que getChoices puisse la dérouler en TRANCHES (temps-tranché)
+    // sur plusieurs frames plutôt qu'en un seul burst bloquant. Le résultat final
+    // (return) est identique à une exécution d'un trait — déterminisme préservé.
+    function* search(seeds, usedInit, tNow) {
         const heap = makeHeap();
         const bestAt = new Map();        // "stop|used|lastTrip" → t
         const completed = new Map();     // "tripIds…" (+meta key) → complétion
@@ -386,6 +390,10 @@ export function createChoiceEngine({
             }
             if (t > deadline) break;
             if (++settles > MAX_SETTLES) break;
+            // Céder la main tous les 256 états. Aux heures denses un état coûte plus
+            // cher (plus de voisins × départs à étendre) ; 256 borne la tranche à
+            // ~8 ms au pire, sous le budget d'une frame 60 fps.
+            if ((settles & 255) === 0) yield;
 
             const lastTid = legs.length ? legs[legs.length - 1].tripId : '';
             const key = `${stop}|${usedKey}|${lastTid}`;
@@ -499,10 +507,16 @@ export function createChoiceEngine({
     // ride  : {type:'ride', ti, tBoard, boardPos, tAlight?, alightPos?}   (ouvert si tAlight absent)
     let plan = [];
     let committedId = null;
-    let cache = null;   // { tAt, validUntil, choices }
+    let cache = null;         // { tAt, validUntil, choices }
+    let pending = null;       // { tAbs, gen } — calcul temps-tranché en cours
+    let lastChoices = null;   // derniers choix terminés (affichés pendant un calcul)
     let lastSearchStats = null;   // santé de la dernière recherche (garde-fou)
 
-    function invalidate() { cache = null; }
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+    // L'état a changé (engagement, reset) : les caches et le calcul en cours sont
+    // périmés. On repart de zéro (le prochain getChoices recalcule à fond).
+    function invalidate() { cache = null; pending = null; lastChoices = null; }
 
     function reset() { plan = []; committedId = null; invalidate(); }
 
@@ -585,10 +599,10 @@ export function createChoiceEngine({
     }
 
     // ── Énumération contexte « à pied » ────────────────────────────────────
-    function enumerateOnFoot(pos, tNow, used) {
+    function* enumerateOnFoot(pos, tNow, used) {
         const seeds = stopsNearPoint(pos).map(({ i, walkS }) => ({ t: tNow + walkS, stop: i }));
         if (!seeds.length) return [];
-        const completions = search(seeds, used, tNow);
+        const completions = yield* search(seeds, used, tNow);
 
         // Groupe par premier embarquement (tripId@stop)
         const groups = new Map();
@@ -677,7 +691,7 @@ export function createChoiceEngine({
     }
 
     // ── Énumération contexte « à bord » ────────────────────────────────────
-    function enumerateRiding(ride, tNow, used) {
+    function* enumerateRiding(ride, tNow, used) {
         const trip = tripByIdx[ride.ti];
         const geom = lineGeom.get(trip.lineId);
 
@@ -732,7 +746,7 @@ export function createChoiceEngine({
 
         // b) Transferts : Dijkstra semé à chaque descente possible
         const seeds = alights.map(q => ({ t: trip.seq[q].tArr, stop: trip.seq[q].stop, meta: { q } }));
-        const completions = search(seeds, used, tNow);
+        const completions = yield* search(seeds, used, tNow);
 
         // Groupe par (descente, premier embarquement) puis dédoublonne par ligne cible
         const groups = new Map();
@@ -787,14 +801,18 @@ export function createChoiceEngine({
         return choices;
     }
 
-    // ── getChoices : énumération avec cache événementiel ───────────────────
-    function computeChoices(tAbs) {
+    // ── getChoices : énumération TEMPS-TRANCHÉE + cache événementiel ────────
+    // computeChoices est un générateur : il cède la main pendant le Dijkstra
+    // (via yield* search). getChoices le déroule par petits budgets de temps sur
+    // plusieurs frames, en affichant les DERNIERS choix connus pendant le calcul.
+    // Évite le « burst » bloquant de ~300-1000 ms tous les ~30 s de sim.
+    function* computeChoices(tAbs) {
         const ph = phaseAt(tAbs);
         if (ph.mode === 'arrived') return [];
         const used = usedLinesAt(tAbs);
         let list = ph.mode === 'riding'
-            ? enumerateRiding(ph.ride, tAbs, used)
-            : enumerateOnFoot({ lat: ph.lat, lon: ph.lon }, tAbs, used);
+            ? yield* enumerateRiding(ph.ride, tAbs, used)
+            : yield* enumerateOnFoot({ lat: ph.lat, lon: ph.lon }, tAbs, used);
         list = list.filter(c => c.expiresS >= tAbs);
         list.sort((a, b) => a.bestArrivalS - b.bestArrivalS || a.expiresS - b.expiresS);
         // Le choix engagé reste toujours visible, même hors du top nBest
@@ -805,9 +823,7 @@ export function createChoiceEngine({
         return list;
     }
 
-    function getChoices(tAbs) {
-        if (cache && tAbs >= cache.tAt && tAbs < cache.validUntil) return cache.choices;
-        const choices = computeChoices(tAbs);
+    function finalizeChoices(tAbs, choices) {
         const ph = phaseAt(tAbs);
         let validUntil = Math.min(
             nextTransition(tAbs),
@@ -816,7 +832,48 @@ export function createChoiceEngine({
         );
         if (!(validUntil > tAbs)) validUntil = tAbs + 1;
         cache = { tAt: tAbs, validUntil, choices };
+        lastChoices = choices;
         return choices;
+    }
+
+    const SLICE_BUDGET_MS = 5;    // temps max de calcul par frame (version tranchée)
+    const SCRUB_JUMP_S    = 120;  // saut de temps ⇒ le calcul en cours devient caduc
+
+    // Version SYNCHRONE : toujours des choix frais (déroule le générateur d'un
+    // trait). Utilisée par les tests et par commit (correction immédiate requise).
+    function getChoices(tAbs) {
+        if (cache && tAbs >= cache.tAt && tAbs < cache.validUntil) return cache.choices;
+        const gen = computeChoices(tAbs);
+        let r; do { r = gen.next(); } while (!r.done);
+        return finalizeChoices(tAbs, r.value ?? []);
+    }
+
+    // Version TEMPS-TRANCHÉE : ne bloque jamais (sauf tout premier calcul). Déroule
+    // le générateur par petits budgets sur plusieurs frames et affiche les derniers
+    // choix connus (filtrés par péremption) pendant le calcul. Utilisée par le
+    // panneau à chaque frame → animation fluide, pas de burst. Contrepartie : aux
+    // vitesses élevées (×60/×120) les choix peuvent accuser un léger retard, le
+    // temps que le calcul rattrape (voir dette technique §15.1 : une recherche
+    // dirigée supprimerait ce retard).
+    function getChoicesSliced(tAbs) {
+        if (cache && tAbs >= cache.tAt && tAbs < cache.validUntil) return cache.choices;
+        // Un gros saut (scrub/rewind) rend caduc le calcul en cours ; sinon on le
+        // laisse aboutir même si « maintenant » a un peu avancé entre-temps.
+        if (!pending || Math.abs(tAbs - pending.tAbs) > SCRUB_JUMP_S) {
+            pending = { tAbs, gen: computeChoices(tAbs) };
+        }
+        const start = now();
+        let r = pending.gen.next();
+        while (!r.done && now() - start < SLICE_BUDGET_MS) r = pending.gen.next();
+        if (r.done) {
+            const at = pending.tAbs; const choices = r.value ?? []; pending = null;
+            return finalizeChoices(at, choices);
+        }
+        if (lastChoices) return lastChoices.filter(c => c.expiresS >= tAbs);
+        // Tout premier calcul (rien à afficher) : on bloque cette fois seulement.
+        do { r = pending.gen.next(); } while (!r.done);
+        const at = pending.tAbs; const choices = r.value ?? []; pending = null;
+        return finalizeChoices(at, choices);
     }
 
     // ── Engagement ─────────────────────────────────────────────────────────
@@ -941,6 +998,7 @@ export function createChoiceEngine({
         commit,
         choiceCdf,
         getChoicePath,
+        getChoicesSliced,
         getState: phaseAt,
         getPassenger,
         getPlanTripIds,

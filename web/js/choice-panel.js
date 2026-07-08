@@ -211,8 +211,10 @@ export function createChoicePanel({ container, engine, t0, onCommit, onHighlight
     }
 
     // ── Synchronisation des colonnes avec le moteur ────────────────────────
+    // getChoicesSliced : calcul temps-tranché (ne bloque pas la frame). Appelé à
+    // chaque rafraîchissement du panneau → animation fluide (pas de burst).
     function syncCols(tAbs) {
-        const live = engine.getChoices(tAbs);
+        const live = engine.getChoicesSliced(tAbs);
         const liveIds = new Set(live.map(c => c.id));
         for (const col of cols) {
             if (col.state === 'live' && !liveIds.has(col.id)) {

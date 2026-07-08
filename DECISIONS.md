@@ -265,6 +265,16 @@ recherche est coupée sans complétion ; test L3 « garde-fou » ; barrière dan
 `data-sync.yml` (tests L3 avant commit/déploiement). Une régression de données
 qui repousse la 1re complétion échoue donc en CI, pas en silence.
 
+**Temps-tranché (2026-07, mitigation du « burst » en lecture).** L'énumération
+bloquait le fil principal ~300-1000 ms tous les ~30 s de sim (freeze périodique
+en lecture). Corrigé : le Dijkstra est un **générateur** qui cède la main tous
+les 256 états ; `getChoicesSliced(tAbs)` (utilisé par le panneau) le déroule par
+budgets de ~5 ms/frame en affichant les derniers choix connus pendant le calcul.
+`getChoices(tAbs)` reste synchrone (frais) pour les tests et `commit`. Plus de
+freeze aux vitesses usuelles (×5-×20). Contrepartie : aux vitesses élevées
+(×60/×120) les choix accusent un léger RETARD le temps que le calcul rattrape —
+symptôme, pas cause. La recherche dirigée (ci-dessous) supprimerait ce retard.
+
 **Pistes de correction (non faites).** Ce qui a été TESTÉ sans effet : réduire
 l'horizon temporel (`maxJourneyS`), filtre géographique de couloir (ellipse) —
 la borne vient de la dimension « sous-ensemble de lignes », pas de l'espace ni

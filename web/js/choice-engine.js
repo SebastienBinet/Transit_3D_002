@@ -941,34 +941,35 @@ export function createChoiceEngine({
     // bonhommes de surlignage (Cas 7). Retourne { startS, endS, durationS,
     // tripIds, sampleAbs(tAbs) → {lat, lon} } où tAbs est en sec depuis minuit.
     // Le trajet couvre origine → (marche) → bus → (correspondances) → destination.
-    function getChoicePath(choice) {
-        const sp = choice?.spine;
-        if (!sp || !sp.hops.length) return null;
+    // Construit un échantillonneur espace-temps à partir d'une SÉQUENCE DE HOPS
+    // (chacun {lineId, gb, ga, dep, arr, tripId, walkS}). accessWalkS/accessFrom :
+    // marche d'accès optionnelle avant le 1er hop (choix « board »).
+    function buildSampler(hops, egressWalkS, accessWalkS, accessFrom) {
+        if (!hops.length) return null;
         const ll = g => ({ lat: stops[g].lat, lon: stops[g].lon });
         const segs = [];
-        const h0 = sp.hops[0];
-        let startS;
-        if (choice.kind === 'board') {
-            startS = h0.dep - (choice.walkS ?? 0);
-            segs.push({ t0: startS, t1: h0.dep, kind: 'walk', p0: origin, p1: ll(h0.gb) });
-        } else {
-            startS = h0.dep;   // à bord : le flux part de l'embarquement du bus courant
+        const h0 = hops[0];
+        let startS = h0.dep;
+        if (accessWalkS != null && accessFrom) {
+            startS = h0.dep - accessWalkS;
+            segs.push({ t0: startS, t1: h0.dep, kind: 'walk', p0: accessFrom, p1: ll(h0.gb) });
         }
-        for (let i = 0; i < sp.hops.length; i++) {
-            const h = sp.hops[i];
+        for (let i = 0; i < hops.length; i++) {
+            const h = hops[i];
             segs.push({ t0: h.dep, t1: h.arr, kind: 'bus', lineId: h.lineId, tripId: h.tripId });
-            if (i < sp.hops.length - 1) {
-                const nx = sp.hops[i + 1];
+            if (i < hops.length - 1) {
+                const nx = hops[i + 1];
                 const wEnd = h.arr + (nx.walkS ?? 0);
                 segs.push({ t0: h.arr, t1: wEnd, kind: 'walk', p0: ll(h.ga), p1: ll(nx.gb) });
                 if (nx.dep > wEnd) segs.push({ t0: wEnd, t1: nx.dep, kind: 'wait', p0: ll(nx.gb), p1: ll(nx.gb) });
             }
         }
-        const last = sp.hops[sp.hops.length - 1];
-        const egEnd = last.arr + (sp.egressWalkS ?? 0);
+        const last = hops[hops.length - 1];
+        const egEnd = last.arr + (egressWalkS ?? 0);
         segs.push({ t0: last.arr, t1: egEnd, kind: 'walk', p0: ll(last.ga), p1: destination });
         const endS = egEnd;
 
+        // Retourne { lat, lon, phase:'walk'|'wait'|'bus' } — le phase sert au rendu.
         function sampleAbs(tAbs) {
             const t = Math.max(startS + 1e-3, Math.min(endS - 1e-3, tAbs));
             for (const s of segs) {
@@ -977,16 +978,76 @@ export function createChoiceEngine({
                     const trip = tripById.get(s.tripId);
                     const geom = lineGeom.get(s.lineId);
                     if (!trip || !geom) return null;
-                    return progressToLatLon(schedOf(trip)(t), geom.shape);
+                    const ll2 = progressToLatLon(schedOf(trip)(t), geom.shape);
+                    return ll2 ? { lat: ll2.lat, lon: ll2.lon, phase: 'bus' } : null;
                 }
                 const r = (t - s.t0) / Math.max(1e-9, s.t1 - s.t0);
                 return { lat: s.p0.lat + r * (s.p1.lat - s.p0.lat),
-                         lon: s.p0.lon + r * (s.p1.lon - s.p0.lon) };
+                         lon: s.p0.lon + r * (s.p1.lon - s.p0.lon), phase: s.kind };
             }
             return null;
         }
         return { startS, endS, durationS: endS - startS,
-                 tripIds: sp.hops.map(h => h.tripId), sampleAbs };
+                 tripIds: hops.map(h => h.tripId), sampleAbs };
+    }
+
+    function getChoicePath(choice) {
+        const sp = choice?.spine;
+        if (!sp || !sp.hops.length) return null;
+        const access = choice.kind === 'board' ? (choice.walkS ?? 0) : null;
+        return buildSampler(sp.hops, sp.egressWalkS, access, access != null ? origin : null);
+    }
+
+    // Complétion brute (legs) → hops pour buildSampler.
+    function legsToHops(legs) {
+        return legs.map(l => ({ lineId: l.lineId, gb: l.boardStop, ga: l.alightStop,
+                                dep: l.boardS, arr: l.alightS, tripId: l.tripId, walkS: l.fromWalkS }));
+    }
+
+    // Recherche synchrone (draine le générateur) — pour les reroutes (item 4),
+    // appelée au changement de surlignage (rythme utilisateur), pas par frame.
+    function searchSync(seeds, usedInit, tNow) {
+        const gen = search(seeds, usedInit, tNow);
+        let r; do { r = gen.next(); } while (!r.done);
+        return r.value ?? [];
+    }
+
+    // RÉALISATIONS d'un choix (item 4) : au lieu d'un seul trajet, la distribution
+    // des issues. R0 = tout réussi (prob = ∏ correspondances). Pour chaque
+    // correspondance risquée i, une réalisation « rate i » : préfixe commun
+    // jusqu'à i-1, puis un AUTRE itinéraire re-planifié depuis l'arrêt de descente
+    // (la ligne ratée est INTERDITE → divergence visuelle). Probabilités
+    // mutuellement exclusives (1er échec) qui somment ≤ 1.
+    function getChoiceRealizations(choice, nowAbs) {
+        const base = getChoicePath(choice);
+        if (!base) return [];
+        const sp = choice.spine;
+        const hops = sp.hops;
+        const access = choice.kind === 'board' ? (choice.walkS ?? 0) : null;
+        const accessFrom = access != null ? origin : null;
+
+        const reals = [];
+        let prefixProb = 1;
+        for (let i = 1; i < hops.length; i++) {
+            const a = hops[i - 1], b = hops[i];
+            const p = catchProb(a.arr, a.tripId, b.walkS, b.dep, b.tripId, nowAbs, evSig);
+            const missProb = prefixProb * (1 - p);
+            prefixProb *= p;
+            if (missProb < 0.02) continue;   // correspondance sûre → pas de branche
+
+            // Reroute : depuis l'arrêt de descente de a, la ligne ratée (b) interdite.
+            const usedBases = new Set(hops.slice(0, i).map(h => baseLine(h.lineId)));
+            usedBases.add(baseLine(b.lineId));
+            const comps = searchSync([{ t: a.arr, stop: a.ga }], usedBases, a.arr);
+            if (!comps.length) continue;     // aucun autre itinéraire → masse perdue
+            comps.sort((x, y) => x.arrivalS - y.arrivalS);
+            const rr = comps[0];
+            const newHops = hops.slice(0, i).concat(legsToHops(rr.legs));
+            const path = buildSampler(newHops, rr.egressWalkS, access, accessFrom);
+            if (path) reals.push({ prob: missProb, path });
+        }
+        reals.unshift({ prob: prefixProb, path: base });   // R0 en tête
+        return reals;
     }
 
     return {
@@ -998,6 +1059,7 @@ export function createChoiceEngine({
         commit,
         choiceCdf,
         getChoicePath,
+        getChoiceRealizations,
         getChoicesSliced,
         getState: phaseAt,
         getPassenger,

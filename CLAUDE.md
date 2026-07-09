@@ -41,3 +41,4 @@ Langue de travail: français.
 - Code minimal qui résout le problème énoncé; pas de fonctionnalités spéculatives.
 - En modifiant, ne changer que le nécessaire; corriger seulement les erreurs nouvellement introduites.
 - Avant d'écrire/modifier du code: définir le critère de succès, puis boucler jusqu'à ce qu'il soit rempli.
+

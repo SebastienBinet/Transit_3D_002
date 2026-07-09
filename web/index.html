@@ -133,7 +133,13 @@
   <div id="stream-controls" style="display:none; position:fixed; top:16px; right:130px; z-index:12;
        background:rgba(0,0,0,0.72); padding:9px 12px; border-radius:8px; border:1px solid #446;
        font-size:11px; color:#cdd; font-family:monospace; line-height:1.9;">
-    <div style="color:#ffdd66; font-weight:bold; margin-bottom:3px;">Flux surlignage (essai)</div>
+    <div style="color:#ffdd66; font-weight:bold; margin-bottom:3px;">Flux bonhommes (essai)</div>
+    <div>Animation
+      <select id="anim-mode" style="font-size:10px; padding:1px 3px;">
+        <option value="survol" selected>Survol d'un choix</option>
+        <option value="cohorte">Cohorte 1000</option>
+      </select>
+    </div>
     <div>Mode
       <select id="stream-mode" style="font-size:10px; padding:1px 3px;">
         <option value="ground" selected>Au sol</option>
@@ -141,7 +147,7 @@
         <option value="both">Au sol + Espace-temps</option>
       </select>
     </div>
-    <div>Espacement <span id="stream-spacing-val">1</span> min<br>
+    <div id="stream-spacing-row">Espacement <span id="stream-spacing-val">1</span> min<br>
       <input id="stream-spacing" type="range" min="0.5" max="10" step="0.5" value="1" style="width:130px;">
     </div>
     <div>Vitesse ×<span id="stream-speed-val">100</span><br>
@@ -187,7 +193,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -204,6 +210,21 @@
     let walkMode = null;
     let journeyPanel = null;
     let choiceEngine = null;   // Cas 7 — remis à zéro au rembobinage
+
+    // Cas 7 — mode cohorte : source de la vague de 1000 bonhommes. Garde-fou :
+    // on ne relance pas le calcul coûteux (Dijkstra reroutes) si « maintenant »
+    // n'a guère bougé (ex. en pause) → la cohorte reste stable entre relances.
+    let cohortCache = null, cohortLastNow = -1e9;
+    function buildCohort(nowAbs) {
+      if (!choiceEngine) return null;
+      if (cohortCache && Math.abs(nowAbs - cohortLastNow) < 60) return null;   // inchangé → garder
+      cohortCache = choiceEngine.getCohort(nowAbs, { size: 1000 });
+      cohortLastNow = nowAbs;
+      return cohortCache;
+    }
+    function animModeIsCohort() {
+      return document.getElementById('anim-mode').value === 'cohorte';
+    }
 
     // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
     const storyLegendHTML = document.getElementById('legend').innerHTML;
@@ -249,6 +270,10 @@
       choiceEngine = null;
       setJourneyHighlight(null);
       setHighlightStream(null);
+      setCohortActive(false);
+      cohortCache = null;
+      document.getElementById('anim-mode').value = 'survol';
+      document.getElementById('stream-spacing-row').style.display = '';
       document.getElementById('stream-controls').style.display = 'none';
     }
 
@@ -305,6 +330,7 @@
       // ses bus restent nets, les autres s'estompent — et anime un flux de
       // bonhommes le long du trajet (temps machine). Voir les curseurs du HUD.
       function applyHighlight(choice) {
+        if (animModeIsCohort()) return;   // en cohorte, le survol n'agit pas sur la 3D
         const tAbs = t0 + (player?.simTime ?? 0);
         const reals = choice ? choiceEngine.getChoiceRealizations(choice, tAbs) : null;
         // Estompage 3D : tous les bus de toutes les réalisations (chemin engagé + replis)
@@ -327,6 +353,15 @@
         spacingS: Number(document.getElementById('stream-spacing').value) * 60,
         speedMul: Number(document.getElementById('stream-speed').value),
       });
+      // Cohorte : source de la vague + paramètres partagés (axe d'affichage, vitesse)
+      cohortCache = null;
+      setCohortSource(buildCohort);
+      setCohortParams({
+        mode: document.getElementById('stream-mode').value,
+        speedMul: Number(document.getElementById('stream-speed').value),
+      });
+      document.getElementById('anim-mode').value = 'survol';
+      document.getElementById('stream-spacing-row').style.display = '';
       document.getElementById('stream-controls').style.display = '';
 
       player = model;
@@ -615,13 +650,31 @@
         journeyPanel?.reset?.();
         setJourneyHighlight(null);
         setHighlightStream(null);
+        cohortCache = null;
+      }
+      update();
+      if (choiceEngine && animModeIsCohort()) setCohortActive(true);   // relance la vague au départ
+    };
+
+    // Cas 7 : curseurs temporaires du flux de bonhommes
+    document.getElementById('anim-mode').onchange = e => {
+      const cohorte = e.target.value === 'cohorte';
+      document.getElementById('stream-spacing-row').style.display = cohorte ? 'none' : '';
+      if (cohorte) {
+        setJourneyHighlight(null); setHighlightStream(null);   // nettoyer le survol
+        setCohortParams({ mode: document.getElementById('stream-mode').value,
+                          speedMul: Number(document.getElementById('stream-speed').value) });
+        cohortCache = null;
+        setCohortActive(true);
+      } else {
+        setCohortActive(false);
       }
       update();
     };
-
-    // Cas 7 : curseurs temporaires du flux de bonhommes de surlignage
-    document.getElementById('stream-mode').onchange = e =>
+    document.getElementById('stream-mode').onchange = e => {
       setStreamParams({ mode: e.target.value });
+      setCohortParams({ mode: e.target.value });   // même axe pour la cohorte
+    };
     document.getElementById('stream-spacing').oninput = e => {
       document.getElementById('stream-spacing-val').textContent = e.target.value;
       setStreamParams({ spacingS: Number(e.target.value) * 60 });
@@ -629,6 +682,7 @@
     document.getElementById('stream-speed').oninput = e => {
       document.getElementById('stream-speed-val').textContent = e.target.value;
       setStreamParams({ speedMul: Number(e.target.value) });
+      setCohortParams({ speedMul: Number(e.target.value) });
     };
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));

@@ -104,6 +104,156 @@ export function setStreamParams({ mode, spacingS, speedMul } = {}) {
     if (speedMul != null) _streamSpeedMul = Math.max(1, speedMul);
 }
 
+// ── Cohorte (mode « 1000 bonhommes ») ──────────────────────────────────────
+// À l'entrée du mode on lâche `size` voyageurs au départ ; ils se répartissent
+// sur les options (moteur getCohort, déterministe par quantiles), avancent le
+// long de leur trajectoire en TEMPS MACHINE, et quand tous sont arrivés la
+// vague se relance (recalculée au « maintenant » courant). Rendu efficace via
+// THREE.Points (un seul draw call par couche) pour tenir 1000+ figures.
+let _cohort = null;            // { agents, baseStartS, waveEndS } | null
+let _cohortActive = false;
+let _cohortMode = 'ground';    // partage l'axe sol / espace-temps / les-deux
+let _cohortSpeedMul = 100;
+let _cohortSource = null;      // (nowAbs) => cohort|null — reconstruction à la relance
+let _cohortWall0 = 0;          // origine temps-mur de la vague (ms)
+let _cohortCycle = -1;         // n° de vague courante (détection de relance)
+let cohortGround = null, cohortSky = null, cohortLines = null;
+let _cohortPosG = null, _cohortPosS = null, _cohortLinePos = null;
+let _discTex = null;
+
+export function setCohortSource(fn) { _cohortSource = fn; }
+export function setCohortParams({ mode, speedMul } = {}) {
+    if (mode != null)     _cohortMode = mode;
+    if (speedMul != null) _cohortSpeedMul = Math.max(1, speedMul);
+}
+export function setCohortActive(on) {
+    _cohortActive = !!on;
+    if (_cohortActive) {
+        _cohortWall0 = performance.now();
+        _cohortCycle = -1;
+        if (_cohortSource) applyCohort(_cohortSource(_t0ForPassengers + currentSimTime));
+    } else if (cohortGround) {
+        cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
+    }
+}
+
+// Disque doux pour les points (rond, bord fondu).
+function discTexture() {
+    if (_discTex) return _discTex;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.65, 'rgba(255,255,255,1)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+    _discTex = new THREE.CanvasTexture(c);
+    return _discTex;
+}
+
+// Teinte d'un bonhomme : ambre s'il a raté une correspondance et rerouté
+// (« arrivé autrement que prévu »), sinon rampe jaune (serré) → vert-sarcelle
+// (fiable) selon le maillon faible de son trajet.
+function cohortColor(a) {
+    if (a.rerouted) return [1.0, 0.45, 0.12];
+    const t = Math.max(0, Math.min(1, (a.reliability - 0.5) / 0.5));
+    return [0.95 * (1 - t) + 0.25 * t, 0.80 * (1 - t) + 0.90 * t, 0.25 * (1 - t) + 0.55 * t];
+}
+
+function makeCohortObjects() {
+    const mkPts = () => {
+        const mat = new THREE.PointsMaterial({ size: 150, map: discTexture(), vertexColors: true,
+            transparent: true, opacity: 0.92, depthWrite: false, sizeAttenuation: true, alphaTest: 0.35 });
+        const p = new THREE.Points(new THREE.BufferGeometry(), mat);
+        p.visible = false; p.frustumCulled = false; scene.add(p); return p;
+    };
+    cohortGround = mkPts();
+    cohortSky = mkPts();
+    cohortLines = new THREE.LineSegments(new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22 }));
+    cohortLines.visible = false; cohortLines.frustumCulled = false; scene.add(cohortLines);
+}
+
+// (Re)construit les tampons pour une cohorte donnée. Couleurs statiques par
+// bonhomme ; positions réécrites chaque frame.
+function applyCohort(cohort) {
+    _cohort = cohort;
+    if (!cohort) { if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false; return; }
+    if (!cohortGround) makeCohortObjects();
+    const n = cohort.agents.length;
+    _cohortPosG = new Float32Array(n * 3);
+    _cohortPosS = new Float32Array(n * 3);
+    _cohortLinePos = new Float32Array(n * 6);
+    const col = new Float32Array(n * 3);
+    const lineCol = new Float32Array(n * 6);
+    for (let i = 0; i < n; i++) {
+        const [r, g, b] = cohortColor(cohort.agents[i]);
+        col[3 * i] = r; col[3 * i + 1] = g; col[3 * i + 2] = b;
+        lineCol[6 * i] = r;     lineCol[6 * i + 1] = g; lineCol[6 * i + 2] = b;
+        lineCol[6 * i + 3] = r; lineCol[6 * i + 4] = g; lineCol[6 * i + 5] = b;
+    }
+    cohortGround.geometry.setAttribute('position', new THREE.BufferAttribute(_cohortPosG, 3));
+    cohortGround.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    cohortSky.geometry.setAttribute('position', new THREE.BufferAttribute(_cohortPosS, 3));
+    cohortSky.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    cohortLines.geometry.setAttribute('position', new THREE.BufferAttribute(_cohortLinePos, 3));
+    cohortLines.geometry.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
+}
+
+// Une frame de cohorte (appelée depuis la boucle RAF, temps-machine `now` en ms).
+function renderCohortFrame(now) {
+    const waveDur0 = Math.max(1, _cohort.waveEndS - _cohort.baseStartS);
+    const wallTau = ((now - _cohortWall0) / 1000) * _cohortSpeedMul;
+    const nowAbs = _t0ForPassengers + currentSimTime;
+    const cyc = Math.floor(wallTau / (waveDur0 * 1.06));
+    if (cyc !== _cohortCycle) {                    // relance : recalcul au « maintenant » courant
+        _cohortCycle = cyc;
+        if (_cohortSource && cyc > 0) { const fresh = _cohortSource(nowAbs); if (fresh) applyCohort(fresh); }
+    }
+    const c = _cohort, agents = c.agents, n = agents.length;
+    const waveDur = Math.max(1, c.waveEndS - c.baseStartS);
+    const phase = wallTau % (waveDur * 1.06);       // > waveDur = court silence avant relance
+    const wSimT = c.baseStartS + phase;
+    const FEET_Y = 118 * (150 / 180);
+    const showG = _cohortMode === 'ground' || _cohortMode === 'both';
+    const showS = _cohortMode === 'spacetime' || _cohortMode === 'both';
+    const showLine = _cohortMode === 'both';
+    const OFF = -1e7;
+    for (let i = 0; i < n; i++) {
+        const a = agents[i];
+        const tq = wSimT - a.delayS;               // temps-trajet interrogé
+        let gx = 0, gz = 0, gy = OFF, sy = OFF, vis = false;
+        if (phase <= waveDur && tq >= a.path.startS && tq <= a.path.endS) {
+            const pos = a.path.sampleAbs(tq);
+            if (pos) {
+                const w = geoPos(pos.lat, pos.lon);
+                gx = w.x; gz = w.z; gy = FEET_Y;
+                sy = (tq - nowAbs) * TIME_SCALE + FEET_Y;
+                vis = true;
+            }
+        }
+        _cohortPosG[3 * i] = showG && vis ? gx : 0;
+        _cohortPosG[3 * i + 1] = showG && vis ? gy : OFF;
+        _cohortPosG[3 * i + 2] = showG && vis ? gz : 0;
+        _cohortPosS[3 * i] = showS && vis ? gx : 0;
+        _cohortPosS[3 * i + 1] = showS && vis ? sy : OFF;
+        _cohortPosS[3 * i + 2] = showS && vis ? gz : 0;
+        if (showLine && vis) {
+            _cohortLinePos[6 * i] = gx;     _cohortLinePos[6 * i + 1] = gy; _cohortLinePos[6 * i + 2] = gz;
+            _cohortLinePos[6 * i + 3] = gx; _cohortLinePos[6 * i + 4] = sy; _cohortLinePos[6 * i + 5] = gz;
+        } else {
+            _cohortLinePos[6 * i] = 0; _cohortLinePos[6 * i + 1] = OFF; _cohortLinePos[6 * i + 2] = 0;
+            _cohortLinePos[6 * i + 3] = 0; _cohortLinePos[6 * i + 4] = OFF; _cohortLinePos[6 * i + 5] = 0;
+        }
+    }
+    cohortGround.geometry.attributes.position.needsUpdate = true;
+    cohortSky.geometry.attributes.position.needsUpdate = true;
+    cohortLines.geometry.attributes.position.needsUpdate = true;
+    cohortGround.visible = showG;
+    cohortSky.visible = showS;
+    cohortLines.visible = showLine;
+}
+
 function ensureStreamFigures(n) {
     while (streamFigures.length < n) {
         const mk = () => { const s = makePersonSprite(0xffee66); s.scale.set(150, 225, 1); s.visible = false; scene.add(s); return s; };
@@ -140,6 +290,11 @@ function clearStreamSprites() {
     streamFigures.length = 0;
     streamGlows.length = 0;
     _streamReals = null;
+    for (const o of [cohortGround, cohortSky, cohortLines]) {
+        if (o) { scene?.remove(o); o.geometry.dispose(); o.material.map?.dispose?.(); o.material.dispose(); }
+    }
+    cohortGround = cohortSky = cohortLines = null;
+    _cohort = null; _cohortActive = false; _cohortSource = null;
 }
 
 function clearPassengers() {
@@ -611,7 +766,12 @@ export function init(canvas, config) {
         // Flux de bonhommes de surlignage — TEMPS MACHINE (mur), indépendant de
         // play/pause et de la vitesse sim. Bonhommes espacés de _streamSpacingS en
         // temps-trajet, avançant à _streamSpeedMul × le temps mur, en boucle.
-        if (_streamReals) {
+        if (_cohortActive && _cohort) {
+            renderCohortFrame(now);
+            for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
+            for (const g of streamGlows) g.visible = false;
+        } else if (_streamReals) {
+            if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
             const maxDur = Math.max(..._streamReals.map(r => r.path.durationS));
             const nFig   = Math.min(STREAM_CAP, Math.max(2, Math.ceil(maxDur / _streamSpacingS)));
             ensureStreamFigures(nFig);
@@ -685,7 +845,8 @@ export function init(canvas, config) {
                 g.position.set(d0.x, gy, d0.z);
             }
             for (; ci < streamGlows.length; ci++) streamGlows[ci].visible = false;
-        } else if (streamFigures.length) {
+        } else {
+            if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
             for (const g of streamGlows) g.visible = false;
         }

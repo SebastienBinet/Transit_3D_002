@@ -1050,6 +1050,105 @@ export function createChoiceEngine({
         return reals;
     }
 
+    // Maillon faible d'un choix : plus petite proba de correspondance sur son
+    // trajet planifié (1 s'il n'y a pas de transfert). Sert à teinter la cohorte
+    // (fiable ↔ fragile) sans RNG.
+    function weakestLink(choice, nowAbs) {
+        const hops = choice.spine.hops;
+        let wl = 1;
+        for (let i = 1; i < hops.length; i++) {
+            const a = hops[i - 1], b = hops[i];
+            wl = Math.min(wl, catchProb(a.arr, a.tripId, b.walkS, b.dep, b.tripId, nowAbs, evSig));
+        }
+        return wl;
+    }
+
+    // Inverse de la CDF normale standard (approx. rationnelle d'Acklam). Sert à
+    // placer les bonhommes de la cohorte aux QUANTILES de la distribution —
+    // déterministe, aucune RNG (respecte l'invariant « pas de Monte Carlo »).
+    function invNorm(p) {
+        if (p <= 0) return -6; if (p >= 1) return 6;
+        const a = [-3.969683028665376e+1, 2.209460984245205e+2, -2.759285104469687e+2,
+                   1.383577518672690e+2, -3.066479806614716e+1, 2.506628277459239e+0];
+        const b = [-5.447609879822406e+1, 1.615858368580409e+2, -1.556989798598866e+2,
+                   6.680131188771972e+1, -1.328068155288572e+1];
+        const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e+0,
+                   -2.549732539343734e+0, 4.374664141464968e+0, 2.938163982698783e+0];
+        const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e+0, 3.754408661907416e+0];
+        const pl = 0.02425;
+        if (p < pl) {
+            const q = Math.sqrt(-2 * Math.log(p));
+            return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
+        }
+        if (p <= 1 - pl) {
+            const q = p - 0.5, r = q * q;
+            return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+        }
+        const q = Math.sqrt(-2 * Math.log(1 - p));
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
+    }
+
+    // COHORTE (mode « 1000 bonhommes ») : à `nowAbs`, répartit `size` voyageurs
+    // sur les choix de premier départ (uniforme 1/N), puis dans chaque choix sur
+    // ses RÉALISATIONS (getChoiceRealizations) proportionnellement à leur proba,
+    // puis étale chaque groupe en QUANTILES p10..p90 de l'incertitude de départ
+    // (delayS). Entièrement DÉTERMINISTE (quantiles, plus grand reste) : aucun
+    // tirage aléatoire → l'invariant « pas de Monte Carlo » tient. Le retard →
+    // correspondance ratée → reroute est déjà porté par les réalisations, donc
+    // les « malchanceux » divergent causalement, pas par hasard.
+    //
+    // Retourne { agents:[{choiceIdx, choiceId, realIdx, rerouted, reliability,
+    // delayS, path}], baseStartS, waveEndS, nowAbs, size, nChoices } ou null.
+    // PORTABLE (Three.js-free) : le rendu ne fait qu'échantillonner path.sampleAbs.
+    function getCohort(nowAbs, { size = 1000 } = {}) {
+        const choices = getChoices(nowAbs);
+        if (!choices.length) return null;
+        const N = choices.length;
+        const SIGMA_CAP_S = 300;   // borne l'étalement pour rester lisible
+        const agents = [];
+        let baseStartS = Infinity, waveEndS = -Infinity;
+
+        for (let ci = 0; ci < N; ci++) {
+            const choice = choices[ci];
+            const per = Math.floor(size / N) + (ci < (size % N) ? 1 : 0);   // 1/N + reste
+            if (per <= 0) continue;
+            const reals = getChoiceRealizations(choice, nowAbs);
+            if (!reals.length) continue;
+            const wl = weakestLink(choice, nowAbs);
+
+            // Effectifs par réalisation ∝ proba (renormalisée sur les réalisations
+            // disponibles ; masse perdue = jamais-arrivé, non représentée). Plus
+            // grand reste → somme exacte à `per`, déterministe.
+            const tot = reals.reduce((s, r) => s + r.prob, 0) || 1;
+            const raw = reals.map(r => per * r.prob / tot);
+            const counts = raw.map(Math.floor);
+            const rem = per - counts.reduce((s, n) => s + n, 0);
+            const byFrac = raw.map((v, i) => [v - Math.floor(v), i]).sort((x, y) => y[0] - x[0]);
+            for (let k = 0; k < rem; k++) counts[byFrac[k][1]]++;
+
+            const firstDep = choice.spine.hops[0].dep;
+            const spreadSigma = Math.min(SIGMA_CAP_S, sigmaFn(Math.max(0, firstDep - nowAbs)));
+
+            for (let ri = 0; ri < reals.length; ri++) {
+                const n = counts[ri];
+                if (n <= 0) continue;
+                const path = reals[ri].path;
+                const rerouted = ri > 0;
+                for (let j = 0; j < n; j++) {
+                    // quantile centré dans [p10, p90] → un bonhomme à p10, un à p90
+                    const q = 0.10 + 0.80 * (n === 1 ? 0.5 : (j + 0.5) / n);
+                    const delayS = spreadSigma * invNorm(q);
+                    agents.push({ choiceIdx: ci, choiceId: choice.id, realIdx: ri,
+                                  rerouted, reliability: rerouted ? 0.3 : wl, delayS, path });
+                    baseStartS = Math.min(baseStartS, path.startS + delayS);
+                    waveEndS   = Math.max(waveEndS,   path.endS   + delayS);
+                }
+            }
+        }
+        if (!agents.length) return null;
+        return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N };
+    }
+
     return {
         origin, destination, departS,
         tripStarts, sigmaFn, evSig,
@@ -1060,6 +1159,7 @@ export function createChoiceEngine({
         choiceCdf,
         getChoicePath,
         getChoiceRealizations,
+        getCohort,
         getChoicesSliced,
         getState: phaseAt,
         getPassenger,

@@ -285,3 +285,45 @@ clé d'état pour ne pas multiplier par les sous-ensembles de lignes.
 
 **Déclencheur.** À attaquer si on élargit à un corridor plus dense/plus long, à
 plusieurs corridors, ou si la latence d'énumération devient gênante en lecture.
+
+## 16. Cas 7 — mode « Cohorte 1000 » (2026-07-09)
+
+Mode d'animation alternatif (bascule « Animation : Survol d'un choix / Cohorte
+1000 » dans le HUD d'essai). À l'activation on lâche **1000 voyageurs** au point
+de départ ; ils se **répartissent sur les choix** de premier départ, avancent le
+long de leur trajectoire en **temps machine**, et quand tous sont arrivés la
+**vague se relance** (recalculée au « maintenant » courant). Le but : rendre le
+**risque de rater une correspondance** tangible — on voit le paquet se scinder et
+des traînards diverger — et faire ressortir le trajet à privilégier.
+
+**Déterministe, PAS Monte Carlo (invariant préservé).** L'invariant §incertitude
+interdit les échantillons Monte Carlo. La cohorte ne tire donc **rien au hasard** :
+- répartition **1/N** sur les choix (comparaison équitable qui révèle le risque
+  sans le biaiser ; pondérer par attractivité fausserait la conclusion cherchée) ;
+- dans un choix, effectifs par **réalisation** (`getChoiceRealizations`, cf. §14
+  item 4) **proportionnels à la proba** (plus grand reste → somme exacte) ;
+- dans une réalisation, étalement aux **quantiles p10..p90** de l'incertitude de
+  départ (`invNorm` × σ) : un bonhomme à p10, un à p90, le reste réparti.
+Deux appels identiques donnent la **même cohorte** (test L3 `test_cohort.mjs`).
+Le « retard → correspondance ratée → autre itinéraire » est donc **causal** (porté
+par les réalisations), pas un coup de dé. `getCohort` reste **Three.js-free** et
+portable (référence pour le futur produit Python).
+
+**Teinte « par chance » vs « prévisible » (1re version, à discuter).** Chaque
+bonhomme est teinté par la proba de son trajet réalisé : vert-sarcelle = fiable
+(fait ses correspondances avec marge), jaune = serré, **ambre = a raté une
+correspondance et rerouté** (« arrivé autrement que prévu »). Une route fiable →
+essaim vert groupé ; une route risquée → noyau + traînée ambrée. Critère et
+palette **restent ouverts** (décision du porteur reportée).
+
+**Rendu.** `THREE.Points` (sol + ciel) + `LineSegments` (liaisons du mode « les
+deux ») — un draw call par couche pour tenir 1000+ figures. L'espacement du flux
+de survol **n'a pas de sens** ici et est masqué ; l'axe sol/espace-temps/les-deux
+et la vitesse restent partagés.
+
+**Coûts / limites (v1).** `getCohort` appelle le Dijkstra (choix + reroutes) : un
+**hitch ~1 s à l'entrée du mode** et à chaque relance **si** « maintenant » a
+bougé de >60 s (garde-fou ; en pause, aucune reconstruction). À temps-trancher si
+gênant (même piste que §15.1). Étalement borné à σ≤300 s. La **sélection du
+trajet par l'utilisateur** à partir de ce qu'il voit reste **à concevoir** (le
+porteur veut juger la visualisation d'abord).

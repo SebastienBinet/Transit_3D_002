@@ -1106,7 +1106,7 @@ export function createChoiceEngine({
         const N = choices.length;
         const SIGMA_CAP_S = 300;   // borne l'étalement pour rester lisible
         const agents = [];
-        let baseStartS = Infinity, waveEndS = -Infinity;
+        let baseStartS = Infinity;
 
         for (let ci = 0; ci < N; ci++) {
             const choice = choices[ci];
@@ -1138,14 +1138,18 @@ export function createChoiceEngine({
                     // quantile centré dans [p10, p90] → un bonhomme à p10, un à p90
                     const q = 0.10 + 0.80 * (n === 1 ? 0.5 : (j + 0.5) / n);
                     const delayS = spreadSigma * invNorm(q);
-                    agents.push({ choiceIdx: ci, choiceId: choice.id, realIdx: ri,
-                                  rerouted, reliability: rerouted ? 0.3 : wl, delayS, path });
+                    agents.push({ choiceIdx: ci, choiceId: choice.id, lineId: choice.lineId,
+                                  realIdx: ri, rerouted, reliability: rerouted ? 0.3 : wl, delayS, path });
                     baseStartS = Math.min(baseStartS, path.startS + delayS);
-                    waveEndS   = Math.max(waveEndS,   path.endS   + delayS);
                 }
             }
         }
         if (!agents.length) return null;
+        // Fin de vague au p96 des arrivées : un rare traînard (reroute long)
+        // ne doit pas étirer la vague ni vider l'écran sur son dernier tiers.
+        // La relance se déclenche quand ~tout le monde est arrivé.
+        const ends = agents.map(a => a.path.endS + a.delayS).sort((x, y) => x - y);
+        const waveEndS = ends[Math.floor(0.96 * (ends.length - 1))];
         return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N };
     }
 

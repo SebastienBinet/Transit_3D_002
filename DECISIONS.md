@@ -309,19 +309,35 @@ Le « retard → correspondance ratée → autre itinéraire » est donc **causa
 par les réalisations), pas un coup de dé. `getCohort` reste **Three.js-free** et
 portable (référence pour le futur produit Python).
 
-**Teinte « par chance » vs « prévisible » (1re version, à discuter).** Chaque
-bonhomme est teinté par la proba de son trajet réalisé : vert-sarcelle = fiable
-(fait ses correspondances avec marge), jaune = serré, **ambre = a raté une
-correspondance et rerouté** (« arrivé autrement que prévu »). Une route fiable →
-essaim vert groupé ; une route risquée → noyau + traînée ambrée. Critère et
-palette **restent ouverts** (décision du porteur reportée).
+**Couleur = 1er bus, risque = concentration (décision du porteur, v2).** Chaque
+bonhomme prend la couleur de son **premier autobus** (palette `LINE_COLORS`
+partagée avec les CDF du panneau, les tracés et les cônes) : le « bleu » du CDF =
+l'essaim bleu. Le **risque** ne se lit plus à une teinte mais à la
+**concentration** — un essaim compact qui arrive groupé = fiable ; une traînée
+diffuse et étalée = correspondances ratées, arrivées dispersées. Les reroutés
+gardent leur couleur de 1er bus (c'est la dispersion, pas une teinte à part, qui
+dit le risque). Abandonné : la teinte fiabilité/rerouté (v1) noyait l'essaim dans
+la flotte d'autobus, même palette.
+- **Concentration locale** → **halo de densité** par (couleur, cellule), intensité
+  log ∝ nombre : un « blitz » synchronisé s'illumine dans sa couleur.
+- **Deux couleurs au même endroit** → **jitter** déterministe (angle d'or) : la
+  foule éclate en nuage lisible, deux couleurs restent des grains distincts (pas
+  un point mélangé), deux halos se superposent.
+- **« 1 sur 10 / pourquoi 1000 »** → on **calcule 1000** (résolution : une branche
+  ratée à 3 % garde ~30 agents, proportions lisses) mais on **dessine ~180**
+  (sous-échantillon uniforme → concentrations relatives préservées).
+
+**Canvas propre en mode cohorte.** La flotte d'autobus (icônes au sol + cônes p50
+de `renderFrame`) et les **pastilles d'arrêts** sont **masquées** en cohorte :
+mêmes couleurs `LINE_COLORS` que l'essaim, elles le noieraient. On garde carte +
+tracés fins pour le contexte. (Bonus : `drawFrame` ~40 ms → ~0,3 ms.)
 
 **Rendu.** `THREE.Points` (sol + ciel) + `LineSegments` (liaisons du mode « les
-deux ») — un draw call par couche pour tenir 1000+ figures. L'espacement du flux
-de survol **n'a pas de sens** ici et est masqué ; l'axe sol/espace-temps/les-deux
-et la vitesse restent partagés.
+deux ») — un draw call par couche. L'espacement du flux de survol **n'a pas de
+sens** ici et est masqué ; l'axe sol/espace-temps/les-deux et la vitesse partagés.
+Fin de vague au **p96** des arrivées (un rare traînard ne vide pas l'écran).
 
-**Coûts / limites (v1).** `getCohort` appelle le Dijkstra (choix + reroutes) : un
+**Coûts / limites.** `getCohort` appelle le Dijkstra (choix + reroutes) : un
 **hitch ~1 s à l'entrée du mode** et à chaque relance **si** « maintenant » a
 bougé de >60 s (garde-fou ; en pause, aucune reconstruction). À temps-trancher si
 gênant (même piste que §15.1). Étalement borné à σ≤300 s. La **sélection du

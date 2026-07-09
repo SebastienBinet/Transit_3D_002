@@ -45,6 +45,7 @@ test('cohorte : ~1000 agents, chacun avec un trajet', () => {
         assert.ok(Number.isFinite(a.delayS), 'delayS non fini');
         assert.ok(a.reliability >= 0 && a.reliability <= 1, `reliability hors [0,1] : ${a.reliability}`);
         assert.equal(a.rerouted, a.realIdx > 0, 'rerouted doit valoir realIdx>0');
+        assert.ok(typeof a.lineId === 'string' && a.lineId.length, 'lineId manquant (teinte = 1er bus)');
     }
 });
 
@@ -98,13 +99,16 @@ test('cohorte : delayS croissant et symétrique dans chaque réalisation', () =>
 });
 
 // ── Enveloppe de vague cohérente ───────────────────────────────────────────
-test('cohorte : baseStartS/waveEndS bornent tous les agents', () => {
+test('cohorte : enveloppe de vague cohérente (base = min, fin ≈ p96)', () => {
     const eng = makeEngine();
     const cohort = eng.getCohort(T0, { size: 1000 });
-    for (const a of cohort.agents) {
+    for (const a of cohort.agents)
         assert.ok(cohort.baseStartS <= a.path.startS + a.delayS + 1e-6, 'baseStartS trop grand');
-        assert.ok(cohort.waveEndS   >= a.path.endS   + a.delayS - 1e-6, 'waveEndS trop petit');
-    }
+    // waveEndS = p96 des arrivées : couvre ≥ 90 % des agents, borne le pacing
+    // (un rare traînard peut la dépasser).
+    const covered = cohort.agents.filter(a => a.path.endS + a.delayS <= cohort.waveEndS + 1e-6).length;
+    assert.ok(covered >= 0.9 * cohort.agents.length,
+        `waveEndS ne couvre que ${covered}/${cohort.agents.length} agents`);
     assert.ok(cohort.waveEndS > cohort.baseStartS, 'vague de durée nulle');
 });
 

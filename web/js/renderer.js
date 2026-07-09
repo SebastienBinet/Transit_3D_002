@@ -29,6 +29,7 @@ const timeGridLabels = [];   // CSS2DObject — visibilité gérée séparément
 let latCenter, lonCenter, lonM;
 let vehicleObjects = []; // dans timeGroup — vidés/reconstruits à chaque frame
 let groundObjects  = []; // dans scene (Y = 0) — icônes d'autobus + drapeaux au sol
+let stopSpheresGroup = null; // pastilles d'arrêts au sol — masquées en mode cohorte
 let nowPlane;
 let pendingFrame = null;
 export let lastDrawMs = 0;
@@ -110,6 +111,15 @@ export function setStreamParams({ mode, spacingS, speedMul } = {}) {
 // long de leur trajectoire en TEMPS MACHINE, et quand tous sont arrivés la
 // vague se relance (recalculée au « maintenant » courant). Rendu efficace via
 // THREE.Points (un seul draw call par couche) pour tenir 1000+ figures.
+// COULEUR = premier bus emprunté (même palette LINE_COLORS que les CDF du
+// panneau, les tracés carte et les cônes 3D) : le « bleu » du CDF = l'essaim
+// bleu. Le RISQUE se lit à la CONCENTRATION — un essaim compact et vif arrive
+// groupé (fiable) ; une traînée diffuse et étalée = correspondances ratées,
+// arrivées dispersées (risqué). Les retardataires reroutés gardent leur couleur
+// de 1er bus : c'est la dispersion, pas une teinte à part, qui dit le risque.
+const COHORT_DRAW = 180;       // bonhommes DESSINÉS (sous-échantillon lisible du 1000)
+const COHORT_JITTER = 130;     // dispersion locale (m) — sépare une foule en nuage lisible
+const COHORT_CELL = 220;       // taille de cellule pour regrouper les halos de densité
 let _cohort = null;            // { agents, baseStartS, waveEndS } | null
 let _cohortActive = false;
 let _cohortMode = 'ground';    // partage l'axe sol / espace-temps / les-deux
@@ -118,8 +128,10 @@ let _cohortSource = null;      // (nowAbs) => cohort|null — reconstruction à 
 let _cohortWall0 = 0;          // origine temps-mur de la vague (ms)
 let _cohortCycle = -1;         // n° de vague courante (détection de relance)
 let cohortGround = null, cohortSky = null, cohortLines = null;
+const cohortGlows = [];        // halos de densité par (couleur, cellule)
 let _cohortPosG = null, _cohortPosS = null, _cohortLinePos = null;
-let _discTex = null;
+let _cohortDraw = null;        // sous-échantillon dessiné [{a, jx, jz, hex}]
+let _discTex = null, _cohortGlowTex = null;
 
 export function setCohortSource(fn) { _cohortSource = fn; }
 export function setCohortParams({ mode, speedMul } = {}) {
@@ -128,12 +140,14 @@ export function setCohortParams({ mode, speedMul } = {}) {
 }
 export function setCohortActive(on) {
     _cohortActive = !!on;
+    if (stopSpheresGroup) stopSpheresGroup.visible = !_cohortActive;   // pastilles d'arrêts masquées en cohorte
     if (_cohortActive) {
         _cohortWall0 = performance.now();
         _cohortCycle = -1;
         if (_cohortSource) applyCohort(_cohortSource(_t0ForPassengers + currentSimTime));
     } else if (cohortGround) {
         cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
+        for (const g of cohortGlows) g.visible = false;
     }
 }
 
@@ -151,43 +165,69 @@ function discTexture() {
     return _discTex;
 }
 
-// Teinte d'un bonhomme : ambre s'il a raté une correspondance et rerouté
-// (« arrivé autrement que prévu »), sinon rampe jaune (serré) → vert-sarcelle
-// (fiable) selon le maillon faible de son trajet.
-function cohortColor(a) {
-    if (a.rerouted) return [1.0, 0.45, 0.12];
-    const t = Math.max(0, Math.min(1, (a.reliability - 0.5) / 0.5));
-    return [0.95 * (1 - t) + 0.25 * t, 0.80 * (1 - t) + 0.90 * t, 0.25 * (1 - t) + 0.55 * t];
+// Halo doux BLANC (teintable par material.color) pour la densité locale.
+function cohortGlowTexture() {
+    if (_cohortGlowTex) return _cohortGlowTex;
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.4, 'rgba(255,255,255,0.32)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+    _cohortGlowTex = new THREE.CanvasTexture(c);
+    return _cohortGlowTex;
 }
+
+function cohortHex(a) { return LINE_COLORS[a.lineId] ?? 0xffffff; }
+function hexToRgb(hex) { return [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255]; }
 
 function makeCohortObjects() {
     const mkPts = () => {
-        const mat = new THREE.PointsMaterial({ size: 150, map: discTexture(), vertexColors: true,
-            transparent: true, opacity: 0.92, depthWrite: false, sizeAttenuation: true, alphaTest: 0.35 });
+        const mat = new THREE.PointsMaterial({ size: 165, map: discTexture(), vertexColors: true,
+            transparent: true, opacity: 0.82, depthWrite: false, sizeAttenuation: true, alphaTest: 0.28 });
         const p = new THREE.Points(new THREE.BufferGeometry(), mat);
         p.visible = false; p.frustumCulled = false; scene.add(p); return p;
     };
     cohortGround = mkPts();
     cohortSky = mkPts();
     cohortLines = new THREE.LineSegments(new THREE.BufferGeometry(),
-        new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22 }));
+        new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.18 }));
     cohortLines.visible = false; cohortLines.frustumCulled = false; scene.add(cohortLines);
 }
+function ensureCohortGlows(n) {
+    while (cohortGlows.length < n) {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: cohortGlowTexture(),
+            transparent: true, depthWrite: false }));
+        s.visible = false; scene.add(s); cohortGlows.push(s);
+    }
+}
 
-// (Re)construit les tampons pour une cohorte donnée. Couleurs statiques par
-// bonhomme ; positions réécrites chaque frame.
+// (Re)construit les tampons : sous-échantillonne 1 sur ~stride (la résolution
+// vient des 1000, la LISIBILITÉ du sous-échantillon), applique un jitter
+// déterministe (angle d'or) pour éclater les foules, fixe la couleur = 1er bus.
 function applyCohort(cohort) {
     _cohort = cohort;
-    if (!cohort) { if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false; return; }
+    if (!cohort) { if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; } return; }
     if (!cohortGround) makeCohortObjects();
-    const n = cohort.agents.length;
+    const agents = cohort.agents;
+    const stride = Math.max(1, Math.round(agents.length / COHORT_DRAW));
+    const draw = [];
+    for (let i = 0; i < agents.length; i += stride) {
+        const k = draw.length;
+        const ang = k * 2.399963229728653;                       // angle d'or
+        const rad = COHORT_JITTER * Math.sqrt(((k % 64) + 0.5) / 64);
+        draw.push({ a: agents[i], jx: Math.cos(ang) * rad, jz: Math.sin(ang) * rad, hex: cohortHex(agents[i]) });
+    }
+    _cohortDraw = draw;
+    const n = draw.length;
     _cohortPosG = new Float32Array(n * 3);
     _cohortPosS = new Float32Array(n * 3);
     _cohortLinePos = new Float32Array(n * 6);
     const col = new Float32Array(n * 3);
     const lineCol = new Float32Array(n * 6);
     for (let i = 0; i < n; i++) {
-        const [r, g, b] = cohortColor(cohort.agents[i]);
+        const [r, g, b] = hexToRgb(draw[i].hex);
         col[3 * i] = r; col[3 * i + 1] = g; col[3 * i + 2] = b;
         lineCol[6 * i] = r;     lineCol[6 * i + 1] = g; lineCol[6 * i + 2] = b;
         lineCol[6 * i + 3] = r; lineCol[6 * i + 4] = g; lineCol[6 * i + 5] = b;
@@ -210,26 +250,32 @@ function renderCohortFrame(now) {
         _cohortCycle = cyc;
         if (_cohortSource && cyc > 0) { const fresh = _cohortSource(nowAbs); if (fresh) applyCohort(fresh); }
     }
-    const c = _cohort, agents = c.agents, n = agents.length;
-    const waveDur = Math.max(1, c.waveEndS - c.baseStartS);
+    const draw = _cohortDraw, n = draw.length;
+    const waveDur = Math.max(1, _cohort.waveEndS - _cohort.baseStartS);
     const phase = wallTau % (waveDur * 1.06);       // > waveDur = court silence avant relance
-    const wSimT = c.baseStartS + phase;
+    const wSimT = _cohort.baseStartS + phase;
     const FEET_Y = 118 * (150 / 180);
     const showG = _cohortMode === 'ground' || _cohortMode === 'both';
     const showS = _cohortMode === 'spacetime' || _cohortMode === 'both';
     const showLine = _cohortMode === 'both';
     const OFF = -1e7;
+    // clusters de densité par (couleur, cellule) → halos
+    const clusters = new Map();
     for (let i = 0; i < n; i++) {
-        const a = agents[i];
+        const d = draw[i], a = d.a;
         const tq = wSimT - a.delayS;               // temps-trajet interrogé
         let gx = 0, gz = 0, gy = OFF, sy = OFF, vis = false;
         if (phase <= waveDur && tq >= a.path.startS && tq <= a.path.endS) {
             const pos = a.path.sampleAbs(tq);
             if (pos) {
                 const w = geoPos(pos.lat, pos.lon);
-                gx = w.x; gz = w.z; gy = FEET_Y;
+                gx = w.x + d.jx; gz = w.z + d.jz; gy = FEET_Y;
                 sy = (tq - nowAbs) * TIME_SCALE + FEET_Y;
                 vis = true;
+                const key = a.lineId + ',' + Math.round(gx / COHORT_CELL) + ',' + Math.round(gz / COHORT_CELL);
+                let e = clusters.get(key);
+                if (!e) { e = { sx: 0, sz: 0, sy: 0, cnt: 0, hex: d.hex }; clusters.set(key, e); }
+                e.sx += gx; e.sz += gz; e.sy += sy; e.cnt++;
             }
         }
         _cohortPosG[3 * i] = showG && vis ? gx : 0;
@@ -252,6 +298,24 @@ function renderCohortFrame(now) {
     cohortGround.visible = showG;
     cohortSky.visible = showS;
     cohortLines.visible = showLine;
+
+    // Halos de densité : une concentration locale d'une couleur « floute » en
+    // clair dans sa teinte (intensité log ∝ nombre). Deux couleurs au même
+    // endroit = deux halos superposés → on voit les deux présentes.
+    ensureCohortGlows(clusters.size);
+    let gi = 0;
+    for (const e of clusters.values()) {
+        if (e.cnt < 2) continue;                    // halo seulement s'il y a concentration
+        const s = cohortGlows[gi++];
+        const inten = Math.log(e.cnt + 1);
+        s.visible = true;
+        s.material.color.setHex(e.hex);
+        s.material.opacity = Math.min(0.5, 0.13 * inten);
+        const sz = 260 + 180 * inten;
+        s.scale.set(sz, sz, 1);
+        s.position.set(e.sx / e.cnt, showG ? FEET_Y + 4 : e.sy / e.cnt, e.sz / e.cnt);
+    }
+    for (; gi < cohortGlows.length; gi++) cohortGlows[gi].visible = false;
 }
 
 function ensureStreamFigures(n) {
@@ -293,8 +357,10 @@ function clearStreamSprites() {
     for (const o of [cohortGround, cohortSky, cohortLines]) {
         if (o) { scene?.remove(o); o.geometry.dispose(); o.material.map?.dispose?.(); o.material.dispose(); }
     }
+    for (const g of cohortGlows) { scene?.remove(g); g.material.map?.dispose?.(); g.material.dispose(); }
+    cohortGlows.length = 0;
     cohortGround = cohortSky = cohortLines = null;
-    _cohort = null; _cohortActive = false; _cohortSource = null;
+    _cohort = null; _cohortActive = false; _cohortSource = null; _cohortDraw = null;
 }
 
 function clearPassengers() {
@@ -582,22 +648,24 @@ export function init(canvas, config) {
         scene.add(new THREE.GridHelper(10000, 20, 0x223344, 0x1a2a36));
     }
 
-    // Tracés géographiques au sol (scene, Y=0 permanent)
+    // Tracés géographiques au sol (scene, Y=0 permanent). Les pastilles d'arrêts
+    // vont dans un groupe pour pouvoir les masquer en mode cohorte (elles sont
+    // teintées par la même palette LINE_COLORS que l'essaim et le brouilleraient).
+    stopSpheresGroup = new THREE.Group();
     for (const route of routes) {
         const pts = route.shape.map(p => geoPos(p.lat, p.lon));
         scene.add(new THREE.Line(
             new THREE.BufferGeometry().setFromPoints(pts),
             new THREE.LineBasicMaterial({ color: LINE_COLORS[route.line_id] ?? 0x555555, opacity: 0.65, transparent: true }),
         ));
+        const stopMat = new THREE.MeshBasicMaterial({ color: LINE_COLORS[route.line_id] ?? 0x555555 });
         for (const stop of route.stops) {
-            const mesh = new THREE.Mesh(
-                new THREE.SphereGeometry(45, 8, 8),
-                new THREE.MeshBasicMaterial({ color: LINE_COLORS[route.line_id] ?? 0x555555 }),
-            );
+            const mesh = new THREE.Mesh(new THREE.SphereGeometry(45, 8, 8), stopMat);
             mesh.position.copy(geoPos(stop.position.lat, stop.position.lon));
-            scene.add(mesh);
+            stopSpheresGroup.add(mesh);
         }
     }
+    scene.add(stopSpheresGroup);
 
     // Marqueurs d'arrêts planifiés dans le diagramme espace-temps (timeGroup)
     for (const ev of se) {
@@ -771,7 +839,7 @@ export function init(canvas, config) {
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
             for (const g of streamGlows) g.visible = false;
         } else if (_streamReals) {
-            if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
+            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; }
             const maxDur = Math.max(..._streamReals.map(r => r.path.durationS));
             const nFig   = Math.min(STREAM_CAP, Math.max(2, Math.ceil(maxDur / _streamSpacingS)));
             ensureStreamFigures(nFig);
@@ -846,7 +914,7 @@ export function init(canvas, config) {
             }
             for (; ci < streamGlows.length; ci++) streamGlows[ci].visible = false;
         } else {
-            if (cohortGround) cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
+            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; }
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
             for (const g of streamGlows) g.visible = false;
         }
@@ -967,7 +1035,10 @@ function drawFrame(frame, routes) {
         return { lineOp: 0.40, bandOp: 0.10, bold: false };
     }
 
-    for (const vehicle of frame.vehicles) {
+    // En mode COHORTE, on efface la flotte d'autobus (icônes au sol + cônes p50) :
+    // elle est teintée par la même palette LINE_COLORS que l'essaim et le noierait.
+    // On garde la carte et les tracés (persistants) pour le contexte géographique.
+    if (!_cohortActive) for (const vehicle of frame.vehicles) {
         const shape = shapeByLine[vehicle.line_id];
         if (!shape) continue;
         const color = LINE_COLORS[vehicle.line_id] ?? 0x888888;

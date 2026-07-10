@@ -245,14 +245,14 @@ function renderCohortFrame(now) {
     const waveDur0 = Math.max(1, _cohort.waveEndS - _cohort.baseStartS);
     const wallTau = ((now - _cohortWall0) / 1000) * _cohortSpeedMul;
     const nowAbs = _t0ForPassengers + currentSimTime;
-    const cyc = Math.floor(wallTau / (waveDur0 * 1.06));
-    if (cyc !== _cohortCycle) {                    // relance : recalcul au « maintenant » courant
+    const cyc = Math.floor(wallTau / waveDur0);
+    if (cyc !== _cohortCycle) {                    // relance immédiate (aucun silence)
         _cohortCycle = cyc;
         if (_cohortSource && cyc > 0) { const fresh = _cohortSource(nowAbs); if (fresh) applyCohort(fresh); }
     }
     const draw = _cohortDraw, n = draw.length;
     const waveDur = Math.max(1, _cohort.waveEndS - _cohort.baseStartS);
-    const phase = wallTau % (waveDur * 1.06);       // > waveDur = court silence avant relance
+    const phase = wallTau % waveDur;
     const wSimT = _cohort.baseStartS + phase;
     const FEET_Y = 118 * (150 / 180);
     const showG = _cohortMode === 'ground' || _cohortMode === 'both';
@@ -265,7 +265,7 @@ function renderCohortFrame(now) {
         const d = draw[i], a = d.a;
         const tq = wSimT - a.delayS;               // temps-trajet interrogé
         let gx = 0, gz = 0, gy = OFF, sy = OFF, vis = false;
-        if (phase <= waveDur && tq >= a.path.startS && tq <= a.path.endS) {
+        if (tq >= a.path.startS && tq <= a.path.endS) {
             const pos = a.path.sampleAbs(tq);
             if (pos) {
                 const w = geoPos(pos.lat, pos.lon);

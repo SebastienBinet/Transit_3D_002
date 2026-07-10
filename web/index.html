@@ -621,7 +621,10 @@
     function tick(ts) {
       requestAnimationFrame(tick);
       const rawDeltaMs = lastTs !== null ? (ts - lastTs) : 0;
-      if (lastTs !== null && player?.isPlaying) {
+      // En mode cohorte, le temps-sim est GELÉ : la cohorte est un instantané
+      // (« si je pars maintenant ») et la vague fournit le mouvement en temps
+      // machine. Avancer le temps-sim ferait dériver la vague (cf. DECISIONS §16).
+      if (lastTs !== null && player?.isPlaying && !animModeIsCohort()) {
         const wallDelta = Math.min(rawDeltaMs / 1000, 0.1);
         const frameChanged = player.tick(wallDelta);
         if (frameChanged) {
@@ -661,6 +664,7 @@
       const cohorte = e.target.value === 'cohorte';
       document.getElementById('stream-spacing-row').style.display = cohorte ? 'none' : '';
       if (cohorte) {
+        player?.pause();                                       // temps-sim gelé : la cohorte est un instantané
         setJourneyHighlight(null); setHighlightStream(null);   // nettoyer le survol
         setCohortParams({ mode: document.getElementById('stream-mode').value,
                           speedMul: Number(document.getElementById('stream-speed').value) });

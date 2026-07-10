@@ -33,6 +33,23 @@ function makeEngine() {
     });
 }
 
+// ── Points de décision + option recommandée (modes de lecture A/B) ─────────
+test('décision : à pied au départ, une décision est requise', () => {
+    const eng = makeEngine();
+    assert.equal(eng.decisionPending(T0), true, 'à pied avec des choix → décision requise');
+    const rid = eng.recommendedId(T0);
+    const cs = eng.getChoices(T0);
+    assert.equal(rid, cs[0].id, 'recommandé = meilleure arrivée (choix trié en tête)');
+});
+
+test('décision : une fois engagé (en marche), plus de décision requise', () => {
+    const eng = makeEngine();
+    const rid = eng.recommendedId(T0);
+    assert.ok(eng.commit(rid, T0), 'commit du recommandé doit réussir');
+    // À T0 on est désormais en marche vers l'arrêt → plan engagé, pas de décision.
+    assert.equal(eng.decisionPending(T0), false, 'leg engagé → aucune décision en attente');
+});
+
 // ── La cohorte existe et pèse ~1000 ────────────────────────────────────────
 test('cohorte : ~1000 agents, chacun avec un trajet', () => {
     const eng = makeEngine();

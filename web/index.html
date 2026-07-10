@@ -134,6 +134,12 @@
        background:rgba(0,0,0,0.72); padding:9px 12px; border-radius:8px; border:1px solid #446;
        font-size:11px; color:#cdd; font-family:monospace; line-height:1.9;">
     <div style="color:#ffdd66; font-weight:bold; margin-bottom:3px;">Flux bonhommes (essai)</div>
+    <div>Lecture
+      <select id="play-mode" style="font-size:10px; padding:1px 3px;">
+        <option value="A" selected>S'arrêter aux choix</option>
+        <option value="B">Autopilote</option>
+      </select>
+    </div>
     <div>Animation
       <select id="anim-mode" style="font-size:10px; padding:1px 3px;">
         <option value="survol" selected>Survol d'un choix</option>
@@ -224,6 +230,22 @@
     }
     function animModeIsCohort() {
       return document.getElementById('anim-mode').value === 'cohorte';
+    }
+    function playMode() { return document.getElementById('play-mode')?.value || 'A'; }
+
+    // Play/Pause centralisés (Cas 7) : en lecture on suit le voyageur (cohorte
+    // cachée) ; à l'arrêt on montre la distribution « si je décide ici/maintenant »
+    // (cohorte reconstruite à la position courante). Le temps-sim avance à nouveau
+    // en lecture — la cohorte n'apparaît qu'en pause, donc elle ne dérive jamais.
+    function doPlay() {
+      if (!player) return;
+      player.play();
+      if (animModeIsCohort()) setCohortActive(false);
+    }
+    function doPause() {
+      if (!player) return;
+      player.pause();
+      if (animModeIsCohort()) { cohortCache = null; setCohortActive(true); }
     }
 
     // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
@@ -621,17 +643,31 @@
     function tick(ts) {
       requestAnimationFrame(tick);
       const rawDeltaMs = lastTs !== null ? (ts - lastTs) : 0;
-      // En mode cohorte, le temps-sim est GELÉ : la cohorte est un instantané
-      // (« si je pars maintenant ») et la vague fournit le mouvement en temps
-      // machine. Avancer le temps-sim ferait dériver la vague (cf. DECISIONS §16).
-      if (lastTs !== null && player?.isPlaying && !animModeIsCohort()) {
-        const wallDelta = Math.min(rawDeltaMs / 1000, 0.1);
-        const frameChanged = player.tick(wallDelta);
-        if (frameChanged) {
-          dbg.frameIdx++;
-          renderFrame(player.frame, routes);
+      if (lastTs !== null && player?.isPlaying) {
+        // Cas 7 — points de décision. Le voyageur exécute toujours un plan ; à un
+        // point de décision (à pied → embarquer, ou ride ouvert → descendre) :
+        //   A (« s'arrêter aux choix ») : on met en pause et on attend le clic ;
+        //   B (« autopilote ») : on prend l'option recommandée et on continue.
+        if (choiceEngine) {
+          const nowAbs = choiceEngine.departS + player.simTime;
+          if (choiceEngine.decisionPending(nowAbs)) {
+            if (playMode() === 'A') {
+              doPause();
+            } else {
+              const rid = choiceEngine.recommendedId(nowAbs);
+              if (rid) choiceEngine.commit(rid, nowAbs);
+            }
+          }
         }
-        updateHud();
+        if (player.isPlaying) {   // (A a pu mettre en pause juste au-dessus)
+          const wallDelta = Math.min(rawDeltaMs / 1000, 0.1);
+          const frameChanged = player.tick(wallDelta);
+          if (frameChanged) {
+            dbg.frameIdx++;
+            renderFrame(player.frame, routes);
+          }
+          updateHud();
+        }
       }
       if (player) {
         updateSimTime(player.simTime);
@@ -644,8 +680,19 @@
       lastTs = ts;
     }
 
-    document.getElementById('btn-play').onclick    = () => player?.play();
-    document.getElementById('btn-pause').onclick   = () => player?.pause();
+    document.getElementById('btn-play').onclick    = () => {
+      // En mode A, si on est arrêté à un point de décision, presser Play prend
+      // l'OPTION RECOMMANDÉE (plutôt que d'attendre un clic) puis on repart.
+      if (choiceEngine && playMode() === 'A' && player) {
+        const nowAbs = choiceEngine.departS + player.simTime;
+        if (choiceEngine.decisionPending(nowAbs)) {
+          const rid = choiceEngine.recommendedId(nowAbs);
+          if (rid) choiceEngine.commit(rid, nowAbs);
+        }
+      }
+      doPlay();
+    };
+    document.getElementById('btn-pause').onclick   = () => doPause();
     document.getElementById('btn-rewind').onclick  = () => {
       player?.seekTo(0);
       if (choiceEngine) {        // Cas 7 : oublier les engagements et les colonnes
@@ -664,12 +711,11 @@
       const cohorte = e.target.value === 'cohorte';
       document.getElementById('stream-spacing-row').style.display = cohorte ? 'none' : '';
       if (cohorte) {
-        player?.pause();                                       // temps-sim gelé : la cohorte est un instantané
         setJourneyHighlight(null); setHighlightStream(null);   // nettoyer le survol
         setCohortParams({ mode: document.getElementById('stream-mode').value,
                           speedMul: Number(document.getElementById('stream-speed').value) });
         cohortCache = null;
-        setCohortActive(true);
+        setCohortActive(!player?.isPlaying);   // en pause : distribution « ici/maintenant » ; en lecture : cachée
       } else {
         setCohortActive(false);
       }

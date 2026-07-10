@@ -338,8 +338,34 @@ sens** ici et est masqué ; l'axe sol/espace-temps/les-deux et la vitesse partag
 Fin de vague au **p96** des arrivées (un rare traînard ne vide pas l'écran).
 
 **Coûts / limites.** `getCohort` appelle le Dijkstra (choix + reroutes) : un
-**hitch ~1 s à l'entrée du mode** et à chaque relance **si** « maintenant » a
-bougé de >60 s (garde-fou ; en pause, aucune reconstruction). À temps-trancher si
-gênant (même piste que §15.1). Étalement borné à σ≤300 s. La **sélection du
-trajet par l'utilisateur** à partir de ce qu'il voit reste **à concevoir** (le
-porteur veut juger la visualisation d'abord).
+**hitch ~1 s** à la reconstruction (entrée du mode, mise en pause). Étalement
+borné à σ≤300 s.
+
+## 17. Cas 7 — interaction pendant la lecture (Play A/B, 2026-07-10)
+
+**Le voyageur exécute toujours un plan.** Dans la vraie vie on est en tout temps
+en train d'exécuter son prochain mouvement ; le simulateur fait pareil. Le moteur
+expose une **option recommandée** (`recommendedId` = meilleure arrivée) et détecte
+les **points de décision** (`decisionPending` : à pied → embarquer, ou à bord d'un
+ride *ouvert* → choisir où descendre ; marche/attente = leg déjà engagé). Ainsi
+« ne pas cliquer » ≠ « attendre pour rien » : c'est suivre le plan recommandé.
+Règle le piège signalé par le porteur (attente indéfinie / jamais descendre).
+
+**Play fait avancer le temps** (le gel de la cohorte, tenté puis jugé inutile, est
+retiré). Un menu **Lecture A/B** :
+- **A — s'arrêter aux choix** : Play coule (marche/attente/bus) puis **met en
+  pause** à chaque point de décision. Défaut = attendre le clic ; presser **Play**
+  y prend l'**option recommandée** et repart. Cliquer un choix = décider (on reste
+  en pause, on peut inspecter, puis Play).
+- **B — autopilote** : à chaque décision, prend l'option recommandée et continue
+  sans s'arrêter ; cliquer un choix reste possible pour dévier.
+
+**Cohorte liée à la pause.** La cohorte n'apparaît **qu'en pause** (reconstruite à
+la position/temps courant → « les probabilités si je décide *ici, maintenant* »),
+et se cache en lecture (on suit le voyageur ; la flotte réapparaît). Elle ne peut
+donc plus **dériver** : en lecture le temps-sim avance mais la cohorte est cachée ;
+en pause il est fixe. Chaque arrêt en mode A = une cohorte à jour pour ce lieu.
+
+**Reste à concevoir** : la sélection finale du parcours à partir de ce que
+l'utilisateur voit ; et (raffinement) la cohorte construite en cours de ride part
+de l'arrêt d'embarquement du bus courant, pas de la position exacte du voyageur.

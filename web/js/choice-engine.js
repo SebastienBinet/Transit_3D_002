@@ -930,6 +930,25 @@ export function createChoiceEngine({
         return plan.filter(l => l.type === 'ride').map(l => tripByIdx[l.ti].tripId);
     }
 
+    // POINT DE DÉCISION : le voyageur doit choisir sa prochaine action.
+    //  - à pied (aucun leg engagé) → il faut embarquer quelque part ;
+    //  - à bord d'un ride OUVERT (pas encore de descente décidée) → il faut
+    //    choisir où descendre / correspondre.
+    // Marche/attente = leg déjà engagé (décision prise) ; 'arrived' = terminé.
+    function decisionPending(tAbs) {
+        const ph = phaseAt(tAbs);
+        if (ph.mode === 'riding') return ph.ride.tAlight == null && getChoices(tAbs).length > 0;
+        if (ph.mode === 'foot')   return getChoices(tAbs).length > 0;
+        return false;
+    }
+
+    // Option RECOMMANDÉE par défaut à tAbs : getChoices est trié par meilleure
+    // arrivée croissante, donc le premier. null s'il n'y a aucun choix.
+    function recommendedId(tAbs) {
+        const cs = getChoices(tAbs);
+        return cs.length ? cs[0].id : null;
+    }
+
     // CDF d'arrivée d'un choix (modèle « prochain bus qui vient » + repli).
     function choiceCdf(choice, nowAbs, tPlateau = null) {
         if (!choice?.spine) return { pts: [], p90First: null };
@@ -1168,6 +1187,8 @@ export function createChoiceEngine({
         getState: phaseAt,
         getPassenger,
         getPlanTripIds,
+        decisionPending,
+        recommendedId,
         get committedId() { return committedId; },
         // Santé de la dernière recherche Dijkstra : { settles, maxSettles, hitCap,
         // nCompletions }. Sert au diagnostic (console) et aux tests de non-régression.

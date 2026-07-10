@@ -436,6 +436,9 @@
       teardownWalkMode();
       teardownJourneyPanel();
       restoreStoryLegend();   // cas 5/6 la remplaceront par leur propre légende
+      // Le sélecteur Fenêtres/Fourche ne sert qu'aux cas 1/2 (récit) ; masqué ailleurs.
+      document.getElementById('viz-mode-select').style.display =
+        (scenarioId === '1' || scenarioId === '2') ? '' : 'none';
       if (scenarioId === '3') {
         loadWalkCase();
         return;

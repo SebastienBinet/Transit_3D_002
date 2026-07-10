@@ -61,6 +61,10 @@ export function createChoicePanel({ container, engine, t0, onCommit, onHighlight
     // survoler l'une met l'autre en évidence et estompe les autres colonnes.
     let hoveredId = null;
 
+    // Colonne RECOMMANDÉE par le système (id) quand une décision est requise —
+    // celle que Play prendrait par défaut. Repère ★ + cadre vert sur la bande.
+    let recColId = null;
+
     // ── Fenêtre glissante ──────────────────────────────────────────────────
     function btY(t, nowAbs) {
         const tLo = nowAbs - PAST_S;
@@ -293,11 +297,13 @@ export function createChoicePanel({ container, engine, t0, onCommit, onHighlight
         c.save();
         c.globalAlpha = alpha;
 
-        // Étiquette : numéro de la ligne cible (couleur du circuit)
+        // Étiquette : numéro de la ligne cible (couleur du circuit). ★ = option
+        // recommandée par le système (celle que Play prendrait par défaut).
+        const isRec = col.id === recColId;
         const gCol = hex(LINE_COLORS[ch.lineId] ?? 0x888888);
         c.font = 'bold 9px monospace'; c.textAlign = 'center';
         c.fillStyle = gCol;
-        const label = (ch.kind === 'final' ? '→fin' : ch.base) + (ch.committed ? ' ✓' : '');
+        const label = (isRec ? '★' : '') + (ch.kind === 'final' ? '→fin' : ch.base) + (ch.committed ? ' ✓' : '');
         if (w > 18) c.fillText(label, xc, TOP_PAD - 6);
 
         // Legs — position temporelle : les legs `slides` sont ancrés à `anchor`
@@ -368,6 +374,12 @@ export function createChoicePanel({ container, engine, t0, onCommit, onHighlight
             c.setLineDash([]);
             c.strokeRect(x + 1, TOP_PAD - 14, w - 2, DRAW_H + 14);
         }
+        // Cadre vert tireté autour de l'option RECOMMANDÉE (Play la prendrait)
+        if (isRec && !ch.committed && w > 8) {
+            c.strokeStyle = '#66ffcc'; c.lineWidth = 1.5; c.setLineDash([3, 2]);
+            c.strokeRect(x + 1.5, TOP_PAD - 14, w - 3, DRAW_H + 14);
+            c.setLineDash([]);
+        }
         c.restore();
     }
 
@@ -394,6 +406,10 @@ export function createChoicePanel({ container, engine, t0, onCommit, onHighlight
     function drawBands(tAbs) {
         const c = bandsCtx;
         c.clearRect(0, 0, PANEL_W, H);
+
+        // Repère de recommandation : seulement quand une décision est requise
+        // (à pied → embarquer, ou à bord d'un ride ouvert → descendre).
+        recColId = engine.decisionPending(tAbs) ? engine.recommendedId(tAbs) : null;
 
         // Grille des heures (défile avec la fenêtre)
         c.font = '9px monospace'; c.textAlign = 'right';

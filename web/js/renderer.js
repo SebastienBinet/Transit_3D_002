@@ -577,6 +577,9 @@ export function init(canvas, config) {
     timeGridGroup = null;
     timeGridLabels.length = 0;
     clearPassengers();
+    activeVizMode?.dispose();   // pas de mode viz résiduel (fenêtres/fourche) d'un cas précédent
+    activeVizMode = null;
+    timedObjects.length = 0;
 
     const allLats = routes.flatMap(r => r.shape.map(p => p.lat));
     const allLons = routes.flatMap(r => r.shape.map(p => p.lon));

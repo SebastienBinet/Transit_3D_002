@@ -50,6 +50,23 @@ test('décision : une fois engagé (en marche), plus de décision requise', () =
     assert.equal(eng.decisionPending(T0), false, 'leg engagé → aucune décision en attente');
 });
 
+// ── Régression : cohorte construite EN COURS DE TRAJET (à bord d'un bus) ────
+// Le hop[0].dep est alors passé ; l'étalement doit s'ancrer sur un événement
+// futur (arrivée) et NE PAS s'effondrer en un seul gros tas (delayS tous nuls).
+test('cohorte à bord : étalement non effondré', () => {
+    const eng = makeEngine();
+    const rid = eng.recommendedId(T0);
+    const ch = eng.getChoices(T0).find(c => c.id === rid);
+    assert.ok(eng.commit(rid, T0), 'commit du recommandé doit réussir');
+    const tRide = ch.tDep + 60;                       // 60 s après l'embarquement
+    assert.equal(eng.getState(tRide).mode, 'riding', 'le voyageur doit être à bord');
+    const cohort = eng.getCohort(tRide, { size: 500 });
+    assert.ok(cohort, 'cohorte nulle en cours de trajet');
+    const distinct = new Set(cohort.agents.map(a => Math.round(a.delayS)));
+    assert.ok(distinct.size > 3,
+        `étalement effondré en tas : seulement ${distinct.size} valeur(s) de delayS`);
+});
+
 // ── La cohorte existe et pèse ~1000 ────────────────────────────────────────
 test('cohorte : ~1000 agents, chacun avec un trajet', () => {
     const eng = makeEngine();

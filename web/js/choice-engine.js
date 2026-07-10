@@ -1124,6 +1124,7 @@ export function createChoiceEngine({
         if (!choices.length) return null;
         const N = choices.length;
         const SIGMA_CAP_S = 300;   // borne l'étalement pour rester lisible
+        const SIGMA_MIN_S = 45;    // plancher : jamais d'effondrement en un seul tas
         const agents = [];
         let baseStartS = Infinity;
 
@@ -1145,8 +1146,17 @@ export function createChoiceEngine({
             const byFrac = raw.map((v, i) => [v - Math.floor(v), i]).sort((x, y) => y[0] - x[0]);
             for (let k = 0; k < rem; k++) counts[byFrac[k][1]]++;
 
-            const firstDep = choice.spine.hops[0].dep;
-            const spreadSigma = Math.min(SIGMA_CAP_S, sigmaFn(Math.max(0, firstDep - nowAbs)));
+            // Étalement ancré sur le premier événement FUTUR de la colonne : le
+            // DÉPART si on attend encore le bus, l'ARRIVÉE si on est DÉJÀ à bord
+            // (le hop[0].dep est alors dans le passé → sinon σ=0 = un seul gros
+            // tas). Plancher SIGMA_MIN_S pour toujours étaler visiblement.
+            let tRef = Infinity;
+            for (const h of choice.spine.hops) {
+                if (h.dep > nowAbs && h.dep < tRef) tRef = h.dep;
+                if (h.arr > nowAbs && h.arr < tRef) tRef = h.arr;
+            }
+            if (!isFinite(tRef)) tRef = nowAbs + 60;
+            const spreadSigma = Math.min(SIGMA_CAP_S, Math.max(SIGMA_MIN_S, sigmaFn(tRef - nowAbs)));
 
             for (let ri = 0; ri < reals.length; ri++) {
                 const n = counts[ri];

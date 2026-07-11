@@ -146,6 +146,10 @@
         <option value="cohorte">Cohorte 1000</option>
       </select>
     </div>
+    <div><label style="cursor:pointer; user-select:none;">
+      <input type="checkbox" id="cohort-busp50" checked style="cursor:pointer; vertical-align:middle;">
+      p50 des bus utiles
+    </label></div>
     <div>Mode
       <select id="stream-mode" style="font-size:10px; padding:1px 3px;">
         <option value="ground" selected>Au sol</option>
@@ -199,7 +203,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50 } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -378,6 +382,7 @@
       // Cohorte : source de la vague + paramètres partagés (axe d'affichage, vitesse)
       cohortCache = null;
       setCohortSource(buildCohort);
+      setCohortBusP50(document.getElementById('cohort-busp50').checked);
       setCohortParams({
         mode: document.getElementById('stream-mode').value,
         speedMul: Number(document.getElementById('stream-speed').value),
@@ -727,6 +732,10 @@
     document.getElementById('stream-mode').onchange = e => {
       setStreamParams({ mode: e.target.value });
       setCohortParams({ mode: e.target.value });   // même axe pour la cohorte
+    };
+    document.getElementById('cohort-busp50').onchange = e => {
+      setCohortBusP50(e.target.checked);
+      update();
     };
     document.getElementById('stream-spacing').oninput = e => {
       document.getElementById('stream-spacing-val').textContent = e.target.value;

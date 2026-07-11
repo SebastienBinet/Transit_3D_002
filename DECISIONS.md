@@ -337,6 +337,13 @@ deux ») — un draw call par couche. L'espacement du flux de survol **n'a pas d
 sens** ici et est masqué ; l'axe sol/espace-temps/les-deux et la vitesse partagés.
 Fin de vague au **p96** des arrivées (un rare traînard ne vide pas l'écran).
 
+**p50 des bus utiles (case à cocher, défaut activé).** En cohorte, `getCohort`
+renvoie aussi `busP50` : le tracé espace-temps médian de chaque passage emprunté
+par ≥1 trajet de la cohorte (données pures {lat,lon,tAbs} ; le rendu dessine des
+lignes dans le repère des points-ciel). Ce sont les « rails » que l'essaim suit ;
+visibles en modes espace-temps / les-deux (en « au sol », le p50 se projette sur
+le tracé déjà affiché → masqués). Case `#cohort-busp50`.
+
 **Coûts / limites.** `getCohort` appelle le Dijkstra (choix + reroutes) : un
 **hitch ~1 s** à la reconstruction (entrée du mode, mise en pause). Étalement
 borné à σ≤300 s.

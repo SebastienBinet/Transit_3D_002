@@ -1179,7 +1179,33 @@ export function createChoiceEngine({
         // La relance se déclenche quand ~tout le monde est arrivé.
         const ends = agents.map(a => a.path.endS + a.delayS).sort((x, y) => x - y);
         const waveEndS = ends[Math.floor(0.96 * (ends.length - 1))];
-        return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N };
+
+        // p50 des autobus UTILES : tracé espace-temps médian de chaque passage
+        // emprunté par au moins un trajet de la cohorte (sur la fenêtre visible
+        // [nowAbs, waveEndS]). Données pures {lat,lon,tAbs} → le rendu dessine.
+        const tripSet = new Set();
+        for (const a of agents) for (const tid of a.path.tripIds) tripSet.add(tid);
+        const busP50 = [];
+        for (const tid of tripSet) {
+            const trip = tripById.get(tid);
+            if (!trip) continue;
+            const geom = lineGeom.get(trip.lineId);
+            if (!geom) continue;
+            const sched = schedOf(trip);
+            const tA = Math.max(nowAbs, trip.tFirst);
+            const tB = Math.min(waveEndS, trip.tLast);
+            if (tB <= tA) continue;
+            const pts = [];
+            const M = 24;
+            for (let i = 0; i <= M; i++) {
+                const t = tA + (tB - tA) * i / M;
+                const ll = progressToLatLon(sched(t), geom.shape);
+                if (ll) pts.push({ lat: ll.lat, lon: ll.lon, tAbs: t });
+            }
+            if (pts.length >= 2) busP50.push({ lineId: trip.lineId, pts });
+        }
+
+        return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N, busP50 };
     }
 
     return {

@@ -128,12 +128,15 @@ let _cohortSource = null;      // (nowAbs) => cohort|null — reconstruction à 
 let _cohortWall0 = 0;          // origine temps-mur de la vague (ms)
 let _cohortCycle = -1;         // n° de vague courante (détection de relance)
 let cohortGround = null, cohortSky = null, cohortLines = null;
+let cohortBusGroup = null;     // p50 espace-temps des autobus utiles à la cohorte
+let _cohortBusP50On = true;    // case à cocher (défaut : activé)
 const cohortGlows = [];        // halos de densité par (couleur, cellule)
 let _cohortPosG = null, _cohortPosS = null, _cohortLinePos = null;
 let _cohortDraw = null;        // sous-échantillon dessiné [{a, jx, jz, hex}]
 let _discTex = null, _cohortGlowTex = null;
 
 export function setCohortSource(fn) { _cohortSource = fn; }
+export function setCohortBusP50(on) { _cohortBusP50On = !!on; }
 export function setCohortParams({ mode, speedMul } = {}) {
     if (mode != null)     _cohortMode = mode;
     if (speedMul != null) _cohortSpeedMul = Math.max(1, speedMul);
@@ -148,7 +151,16 @@ export function setCohortActive(on) {
     } else if (cohortGround) {
         cohortGround.visible = cohortSky.visible = cohortLines.visible = false;
         for (const g of cohortGlows) g.visible = false;
+        if (cohortBusGroup) cohortBusGroup.visible = false;
     }
+}
+
+// Détruit le groupe des tracés p50 des bus (recréé à chaque cohorte).
+function disposeCohortBus() {
+    if (!cohortBusGroup) return;
+    for (const o of cohortBusGroup.children) { o.geometry.dispose(); o.material.dispose(); }
+    scene?.remove(cohortBusGroup);
+    cohortBusGroup = null;
 }
 
 // Disque doux pour les points (rond, bord fondu).
@@ -238,6 +250,25 @@ function applyCohort(cohort) {
     cohortSky.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
     cohortLines.geometry.setAttribute('position', new THREE.BufferAttribute(_cohortLinePos, 3));
     cohortLines.geometry.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
+
+    // p50 espace-temps des autobus utiles — géométrie figée au « maintenant » de
+    // la cohorte (même repère que les points-ciel : y = (tAbs − nowAbs)·échelle).
+    disposeCohortBus();
+    cohortBusGroup = new THREE.Group();
+    cohortBusGroup.visible = false;
+    scene.add(cohortBusGroup);
+    const FEET_Y = 118 * (150 / 180);
+    for (const bl of cohort.busP50 ?? []) {
+        const pts = bl.pts.map(p => {
+            const w = geoPos(p.lat, p.lon);
+            return new THREE.Vector3(w.x, (p.tAbs - cohort.nowAbs) * TIME_SCALE + FEET_Y, w.z);
+        });
+        const line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(pts),
+            new THREE.LineBasicMaterial({ color: LINE_COLORS[bl.lineId] ?? 0x888888, transparent: true, opacity: 0.5 }));
+        line.frustumCulled = false;
+        cohortBusGroup.add(line);
+    }
 }
 
 // Une frame de cohorte (appelée depuis la boucle RAF, temps-machine `now` en ms).
@@ -298,6 +329,8 @@ function renderCohortFrame(now) {
     cohortGround.visible = showG;
     cohortSky.visible = showS;
     cohortLines.visible = showLine;
+    // p50 des bus : rails espace-temps → visibles là où l'essaim-ciel l'est.
+    if (cohortBusGroup) cohortBusGroup.visible = showS && _cohortBusP50On;
 
     // Halos de densité : une concentration locale d'une couleur « floute » en
     // clair dans sa teinte (intensité log ∝ nombre). Deux couleurs au même
@@ -359,6 +392,7 @@ function clearStreamSprites() {
     }
     for (const g of cohortGlows) { scene?.remove(g); g.material.map?.dispose?.(); g.material.dispose(); }
     cohortGlows.length = 0;
+    disposeCohortBus();
     cohortGround = cohortSky = cohortLines = null;
     _cohort = null; _cohortActive = false; _cohortSource = null; _cohortDraw = null;
 }
@@ -842,7 +876,7 @@ export function init(canvas, config) {
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
             for (const g of streamGlows) g.visible = false;
         } else if (_streamReals) {
-            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; }
+            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; if (cohortBusGroup) cohortBusGroup.visible = false; }
             const maxDur = Math.max(..._streamReals.map(r => r.path.durationS));
             const nFig   = Math.min(STREAM_CAP, Math.max(2, Math.ceil(maxDur / _streamSpacingS)));
             ensureStreamFigures(nFig);
@@ -917,7 +951,7 @@ export function init(canvas, config) {
             }
             for (; ci < streamGlows.length; ci++) streamGlows[ci].visible = false;
         } else {
-            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; }
+            if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; if (cohortBusGroup) cohortBusGroup.visible = false; }
             for (const f of streamFigures) { f.ground.visible = f.sky.visible = f.line.visible = false; }
             for (const g of streamGlows) g.visible = false;
         }

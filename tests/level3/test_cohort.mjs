@@ -83,6 +83,21 @@ test('cohorte : ~1000 agents, chacun avec un trajet', () => {
     }
 });
 
+// ── p50 des bus utiles fourni avec la cohorte ──────────────────────────────
+test('cohorte : p50 des bus utiles (polylignes espace-temps)', () => {
+    const eng = makeEngine();
+    const cohort = eng.getCohort(T0, { size: 500 });
+    assert.ok(Array.isArray(cohort.busP50) && cohort.busP50.length > 0, 'busP50 vide');
+    for (const bl of cohort.busP50) {
+        assert.ok(bl.lineId, 'lineId manquant');
+        assert.ok(bl.pts.length >= 2, 'polyligne trop courte');
+        for (const p of bl.pts) {
+            assert.ok(Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.tAbs), 'point invalide');
+            assert.ok(p.tAbs >= T0 - 1, 'p50 dans le passé (avant maintenant)');
+        }
+    }
+});
+
 // ── Répartition uniforme 1/N sur les choix ─────────────────────────────────
 test('cohorte : répartition uniforme 1/N (écart ≤ 1)', () => {
     const eng = makeEngine();

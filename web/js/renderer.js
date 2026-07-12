@@ -265,7 +265,7 @@ function applyCohort(cohort) {
         });
         const line = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints(pts),
-            new THREE.LineBasicMaterial({ color: LINE_COLORS[bl.lineId] ?? 0x888888, transparent: true, opacity: 0.5 }));
+            new THREE.LineBasicMaterial({ color: LINE_COLORS[bl.lineId] ?? 0x888888, transparent: true, opacity: 0.85 }));
         line.frustumCulled = false;
         cohortBusGroup.add(line);
     }

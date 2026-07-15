@@ -140,6 +140,7 @@
         <option value="B">Autopilote</option>
       </select>
     </div>
+    <div id="case7-only">
     <div>Animation
       <select id="anim-mode" style="font-size:10px; padding:1px 3px;">
         <option value="survol" selected>Survol d'un choix</option>
@@ -163,6 +164,7 @@
     <div>Vitesse ×<span id="stream-speed-val">100</span><br>
       <input id="stream-speed" type="range" min="10" max="300" step="10" value="100" style="width:130px;">
     </div>
+    </div>
   </div>
 
   <div id="hud">
@@ -174,6 +176,7 @@
       <option value="5">Cas 5 — STM simulation horaires</option>
       <option value="6">Cas 6 — Trajets 51∩66 → 480∩144</option>
       <option value="7">Cas 7 — Choix vivants 51∩66 → 480∩144</option>
+      <option value="8">Cas 8 — Carte animée (bus + cohorte)</option>
     </select>
     <button id="btn-rewind">⏮</button>
     <button id="btn-play">▶ Play</button>
@@ -203,7 +206,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50 } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50, setCase8Active, setCase8Source } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -225,6 +228,7 @@
     // on ne relance pas le calcul coûteux (Dijkstra reroutes) si « maintenant »
     // n'a guère bougé (ex. en pause) → la cohorte reste stable entre relances.
     let cohortCache = null, cohortLastNow = -1e9;
+    let isCase8 = false;   // Cas 8 : cohorte au sol en temps-sim
     function buildCohort(nowAbs) {
       if (!choiceEngine) return null;
       if (cohortCache && Math.abs(nowAbs - cohortLastNow) < 60) return null;   // inchangé → garder
@@ -245,11 +249,14 @@
       if (!player) return;
       player.play();
       if (animModeIsCohort()) setCohortActive(false);
+      // Cas 8 : la cohorte avance en temps-sim, rien à cacher.
     }
     function doPause() {
       if (!player) return;
       player.pause();
       if (animModeIsCohort()) { cohortCache = null; setCohortActive(true); }
+      // Cas 8 : à l'arrêt (point de décision), reconstruire depuis « ici/maintenant ».
+      if (isCase8) { cohortCache = null; setCase8Active(true); }
     }
 
     // Légende « récit » d'origine (cas 1/2) — restaurée hors du cas 5.
@@ -297,9 +304,12 @@
       setJourneyHighlight(null);
       setHighlightStream(null);
       setCohortActive(false);
+      setCase8Active(false);
+      isCase8 = false;
       cohortCache = null;
       document.getElementById('anim-mode').value = 'survol';
       document.getElementById('stream-spacing-row').style.display = '';
+      document.getElementById('case7-only').style.display = '';
       document.getElementById('stream-controls').style.display = 'none';
     }
 
@@ -389,6 +399,78 @@
       });
       document.getElementById('anim-mode').value = 'survol';
       document.getElementById('stream-spacing-row').style.display = '';
+      document.getElementById('case7-only').style.display = '';
+      document.getElementById('stream-controls').style.display = '';
+
+      player = model;
+      player.setSpeed(Number(document.getElementById('speed-select').value));
+      update();
+    }
+
+    async function loadChoiceCase8() {
+      // Cas 8 : carte animée (fusion). Une seule horloge (temps-sim) : les
+      // autobus utiles roulent en forme sur la carte et les 1000 bonhommes les
+      // empruntent au sol, en clignotant par itinéraire. Réutilise le moteur, le
+      // panneau et l'interaction A/B du Cas 7 ; pas d'espace-temps.
+      let data, bounds;
+      try {
+        [data, bounds] = await Promise.all([
+          loadCircuits('./data'),
+          fetch('./data/map_bounds.json').then(r => r.json()),
+        ]);
+      } catch (err) {
+        alert(`Les données du Cas 8 sont introuvables.\n\n${err.message}`);
+        return;
+      }
+
+      const dataEndS = Math.max(...data.circuits.flatMap(c =>
+        c.trips.map(t => t.schedule[t.schedule.length - 1]?.t_arr ?? 0)), 0);
+      const t0 = data.index.t0_seconds;
+      const playHorizonS = Math.max(data.index.horizon_s, dataEndS - t0);
+
+      const model = createScheduleModel(data, { playHorizonS });
+      routes = model.routes;
+
+      choiceEngine = createChoiceEngine({
+        circuits: data.circuits,
+        sigma: data.index.sigma,
+        originLines: ['51', '66'],
+        destLines:   ['480', '144'],
+        departS: t0,
+      });
+
+      init(canvas, {
+        routes,
+        transferWindows: [],
+        mapBackground: { url: './data/map_montreal.png', bounds },
+        // pas de timeGrid : Cas 8 est une vue au sol (pas d'axe du temps)
+      });
+
+      document.getElementById('prob-display').style.display = 'none';
+      const USER_COLOR = 0xffdd22;
+      initPassengers(1, [USER_COLOR]);
+      setPassengerT0(t0);
+      setPassengerSource(tAbs => [{
+        journey_id: 1, color: USER_COLOR,
+        ...choiceEngine.getPassenger(tAbs),
+      }]);
+
+      journeyPanel = createChoicePanel({
+        container: document.getElementById('legend'),
+        engine: choiceEngine,
+        t0,
+        // pas de surlignage 3D espace-temps en Cas 8
+      });
+
+      // Cohorte au sol en temps-sim (mêmes bonhommes que le Cas 7, mais voyagent
+      // avec Play). Source = buildCohort (reconstruite aux décisions / à la relance).
+      cohortCache = null;
+      isCase8 = true;
+      setCase8Source(buildCohort);
+      setCase8Active(true);
+
+      // Contrôles : garder « Lecture A/B », masquer les réglages espace-temps.
+      document.getElementById('case7-only').style.display = 'none';
       document.getElementById('stream-controls').style.display = '';
 
       player = model;
@@ -462,6 +544,10 @@
       }
       if (scenarioId === '7') {
         await loadChoiceCase7();
+        return;
+      }
+      if (scenarioId === '8') {
+        await loadChoiceCase8();
         return;
       }
       const data = await loadScenario(`./data/scenario${scenarioId}.json`);
@@ -712,6 +798,7 @@
       }
       update();
       if (choiceEngine && animModeIsCohort()) setCohortActive(true);   // relance la vague au départ
+      if (isCase8) setCase8Active(true);                                // Cas 8 : relance la cohorte au sol
     };
 
     // Cas 7 : curseurs temporaires du flux de bonhommes

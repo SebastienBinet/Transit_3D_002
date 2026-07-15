@@ -83,6 +83,24 @@ test('cohorte : ~1000 agents, chacun avec un trajet', () => {
     }
 });
 
+// ── tripIds + itineraries (pour le Cas 8 : bus au sol + clignotement) ───────
+test('cohorte : tripIds + itineraries valides', () => {
+    const eng = makeEngine();
+    const cohort = eng.getCohort(T0, { size: 500 });
+    assert.ok(Array.isArray(cohort.tripIds) && cohort.tripIds.length > 0, 'tripIds vide');
+    assert.ok(cohort.itineraries && Object.keys(cohort.itineraries).length > 0, 'itineraries vide');
+    for (const a of cohort.agents)
+        assert.ok(cohort.itineraries[a.itinId], `itinId ${a.itinId} absent des itineraries`);
+    for (const [id, it] of Object.entries(cohort.itineraries)) {
+        assert.ok(Array.isArray(it.legs) && it.legs.length > 0, `legs vides pour ${id}`);
+        assert.ok(it.legs.some(l => l.kind === 'bus' && l.lineId), `aucun leg bus pour ${id}`);
+        for (const l of it.legs) {
+            assert.ok(['walk', 'wait', 'bus'].includes(l.kind), `kind invalide : ${l.kind}`);
+            assert.ok(Number.isFinite(l.durationS) && l.durationS >= 0, 'durationS invalide');
+        }
+    }
+});
+
 // ── p50 des bus utiles fourni avec la cohorte ──────────────────────────────
 test('cohorte : p50 des bus utiles (polylignes espace-temps)', () => {
     const eng = makeEngine();

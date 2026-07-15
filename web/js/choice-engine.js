@@ -1063,10 +1063,30 @@ export function createChoiceEngine({
             const rr = comps[0];
             const newHops = hops.slice(0, i).concat(legsToHops(rr.legs));
             const path = buildSampler(newHops, rr.egressWalkS, access, accessFrom);
-            if (path) reals.push({ prob: missProb, path });
+            if (path) reals.push({ prob: missProb, path, hops: newHops, access, egressWalkS: rr.egressWalkS });
         }
-        reals.unshift({ prob: prefixProb, path: base });   // R0 en tête
+        reals.unshift({ prob: prefixProb, path: base, hops, access, egressWalkS: sp.egressWalkS });   // R0 en tête
         return reals;
+    }
+
+    // Séquence de legs d'un itinéraire (pour le clignotement du Cas 8) : à partir
+    // des hops (+ marche d'accès et d'egress), une liste ORDONNÉE de segments
+    // {kind:'walk'|'wait'|'bus', lineId?, durationS}. Les attentes de correspondance
+    // sont dérivées des écarts dep/arr. Données pures (le rendu mappe les couleurs).
+    function itineraryLegs(hops, accessWalkS, egressWalkS) {
+        const legs = [];
+        if (accessWalkS != null) legs.push({ kind: 'walk', durationS: accessWalkS });
+        for (let i = 0; i < hops.length; i++) {
+            const h = hops[i];
+            if (i > 0) {
+                const prev = hops[i - 1];
+                legs.push({ kind: 'walk', durationS: h.walkS ?? 0 });
+                legs.push({ kind: 'wait', durationS: Math.max(0, h.dep - prev.arr - (h.walkS ?? 0)) });
+            }
+            legs.push({ kind: 'bus', lineId: h.lineId, durationS: Math.max(0, h.arr - h.dep) });
+        }
+        legs.push({ kind: 'walk', durationS: egressWalkS ?? 0 });
+        return legs;
     }
 
     // Maillon faible d'un choix : plus petite proba de correspondance sur son
@@ -1126,6 +1146,7 @@ export function createChoiceEngine({
         const SIGMA_CAP_S = 300;   // borne l'étalement pour rester lisible
         const SIGMA_MIN_S = 45;    // plancher : jamais d'effondrement en un seul tas
         const agents = [];
+        const itineraries = {};   // itinId → { legs } : séquence de legs (clignotement Cas 8)
         let baseStartS = Infinity;
 
         for (let ci = 0; ci < N; ci++) {
@@ -1161,14 +1182,17 @@ export function createChoiceEngine({
             for (let ri = 0; ri < reals.length; ri++) {
                 const n = counts[ri];
                 if (n <= 0) continue;
-                const path = reals[ri].path;
+                const r = reals[ri];
+                const path = r.path;
                 const rerouted = ri > 0;
+                const itinId = ci + ':' + ri;   // itinéraire distinct = choix × réalisation
+                if (!itineraries[itinId]) itineraries[itinId] = { legs: itineraryLegs(r.hops, r.access, r.egressWalkS) };
                 for (let j = 0; j < n; j++) {
                     // quantile centré dans [p10, p90] → un bonhomme à p10, un à p90
                     const q = 0.10 + 0.80 * (n === 1 ? 0.5 : (j + 0.5) / n);
                     const delayS = spreadSigma * invNorm(q);
                     agents.push({ choiceIdx: ci, choiceId: choice.id, lineId: choice.lineId,
-                                  realIdx: ri, rerouted, reliability: rerouted ? 0.3 : wl, delayS, path });
+                                  realIdx: ri, itinId, rerouted, reliability: rerouted ? 0.3 : wl, delayS, path });
                     baseStartS = Math.min(baseStartS, path.startS + delayS);
                 }
             }
@@ -1205,7 +1229,8 @@ export function createChoiceEngine({
             if (pts.length >= 2) busP50.push({ lineId: trip.lineId, pts });
         }
 
-        return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N, busP50 };
+        return { agents, baseStartS, waveEndS, nowAbs, size, nChoices: N, busP50,
+                 tripIds: [...tripSet], itineraries };
     }
 
     return {

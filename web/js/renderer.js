@@ -135,6 +135,110 @@ let _cohortPosG = null, _cohortPosS = null, _cohortLinePos = null;
 let _cohortDraw = null;        // sous-échantillon dessiné [{a, jx, jz, hex}]
 let _discTex = null, _cohortGlowTex = null;
 
+// ── Cas 8 : carte animée (fusion) ──────────────────────────────────────────
+// Une seule horloge (temps-sim) : les autobus UTILES roulent en forme sur la
+// carte et les 1000 bonhommes les empruntent, au sol. Chaque bille CLIGNOTE la
+// séquence de son itinéraire (0.5 s/leg), synchronisée par itinéraire.
+const BLINK_STEP_S = 0.5;      // durée d'affichage d'une couleur de leg
+const WALK_LONG_S = 90;        // marche « longue » → gris dans le clignotement
+const WAIT_LONG_S = 90;        // attente « longue » → noir
+const C8_GREY = [0.53, 0.53, 0.53], C8_BLACK = [0.07, 0.07, 0.07], C8_WHITE = [1, 1, 1];
+let _case8Active = false;
+let _case8Source = null;       // (nowAbs) => cohort|null
+let _case8Cohort = null;
+let _case8TripIds = new Set(); // passages utiles (filtre des icônes de bus)
+let _case8Draw = null;         // sous-échantillon [{a, jx, jz}]
+let _case8Pos = null, _case8Col = null;
+let _case8BlinkCols = null;    // itinId → liste de couleurs [r,g,b] (clignotement)
+let case8Points = null;
+
+export function setCase8Source(fn) { _case8Source = fn; }
+export function setCase8Active(on) {
+    _case8Active = !!on;
+    if (stopSpheresGroup) stopSpheresGroup.visible = !on;   // pastilles masquées en Cas 8
+    if (on) {
+        if (_case8Source) applyCase8(_case8Source(_t0ForPassengers + currentSimTime));
+    } else if (case8Points) {
+        case8Points.visible = false;
+    }
+}
+
+// Séquence de couleurs d'un itinéraire pour le clignotement : bus → couleur de
+// ligne ; longue marche → gris ; longue attente → noir ; puis blanc (arrivée).
+function itinBlinkColors(legs) {
+    const cols = [];
+    for (const l of legs) {
+        if (l.kind === 'bus') cols.push(hexToRgb(LINE_COLORS[l.lineId] ?? 0x888888));
+        else if (l.kind === 'walk' && l.durationS >= WALK_LONG_S) cols.push(C8_GREY);
+        else if (l.kind === 'wait' && l.durationS >= WAIT_LONG_S) cols.push(C8_BLACK);
+    }
+    cols.push(C8_WHITE);   // arrivée
+    return cols;
+}
+
+function makeCase8Points() {
+    const mat = new THREE.PointsMaterial({ size: 165, map: discTexture(), vertexColors: true,
+        transparent: true, opacity: 0.9, depthWrite: false, sizeAttenuation: true, alphaTest: 0.3 });
+    case8Points = new THREE.Points(new THREE.BufferGeometry(), mat);
+    case8Points.visible = false; case8Points.frustumCulled = false; scene.add(case8Points);
+}
+
+// (Re)construit les tampons Cas 8 : sous-échantillon (groupé par itinéraire,
+// car les agents sont déjà ordonnés) + jitter + listes de clignotement.
+function applyCase8(cohort) {
+    _case8Cohort = cohort;
+    if (!cohort) { if (case8Points) case8Points.visible = false; return; }
+    _case8TripIds = new Set(cohort.tripIds);
+    _case8BlinkCols = {};
+    for (const [id, it] of Object.entries(cohort.itineraries)) _case8BlinkCols[id] = itinBlinkColors(it.legs);
+    const agents = cohort.agents;
+    const stride = Math.max(1, Math.round(agents.length / COHORT_DRAW));
+    const draw = [];
+    for (let i = 0; i < agents.length; i += stride) {
+        const k = draw.length;
+        const ang = k * 2.399963229728653;
+        const rad = COHORT_JITTER * Math.sqrt(((k % 64) + 0.5) / 64);
+        draw.push({ a: agents[i], jx: Math.cos(ang) * rad, jz: Math.sin(ang) * rad });
+    }
+    _case8Draw = draw;
+    const n = draw.length;
+    _case8Pos = new Float32Array(n * 3);
+    _case8Col = new Float32Array(n * 3);
+    if (!case8Points) makeCase8Points();
+    case8Points.geometry.setAttribute('position', new THREE.BufferAttribute(_case8Pos, 3));
+    case8Points.geometry.setAttribute('color', new THREE.BufferAttribute(_case8Col, 3));
+}
+
+// Une frame Cas 8 (RAF). Position = temps-sim (les bus roulent en parallèle via
+// renderFrame) ; couleur = clignotement temps-machine synchronisé par itinéraire.
+function renderCase8Frame(now) {
+    const nowAbs = _t0ForPassengers + currentSimTime;
+    if (nowAbs > _case8Cohort.waveEndS && _case8Source) {   // tout arrivé → relance au « maintenant »
+        const fresh = _case8Source(nowAbs);
+        if (fresh) applyCase8(fresh);
+    }
+    const draw = _case8Draw, n = draw.length;
+    const FEET_Y = 118 * (150 / 180);
+    const blinkStep = Math.floor((now / 1000) / BLINK_STEP_S);
+    const OFF = -1e7;
+    for (let i = 0; i < n; i++) {
+        const d = draw[i], a = d.a;
+        const pos = a.path.sampleAbs(nowAbs);
+        if (pos) {
+            const w = geoPos(pos.lat, pos.lon);
+            _case8Pos[3 * i] = w.x + d.jx; _case8Pos[3 * i + 1] = FEET_Y; _case8Pos[3 * i + 2] = w.z + d.jz;
+        } else {
+            _case8Pos[3 * i] = 0; _case8Pos[3 * i + 1] = OFF; _case8Pos[3 * i + 2] = 0;
+        }
+        const list = _case8BlinkCols[a.itinId] ?? [C8_WHITE];
+        const rgb = list[blinkStep % list.length];
+        _case8Col[3 * i] = rgb[0]; _case8Col[3 * i + 1] = rgb[1]; _case8Col[3 * i + 2] = rgb[2];
+    }
+    case8Points.geometry.attributes.position.needsUpdate = true;
+    case8Points.geometry.attributes.color.needsUpdate = true;
+    case8Points.visible = true;
+}
+
 export function setCohortSource(fn) { _cohortSource = fn; }
 export function setCohortBusP50(on) { _cohortBusP50On = !!on; }
 export function setCohortParams({ mode, speedMul } = {}) {
@@ -265,7 +369,7 @@ function applyCohort(cohort) {
         });
         const line = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints(pts),
-            new THREE.LineBasicMaterial({ color: LINE_COLORS[bl.lineId] ?? 0x888888, transparent: true, opacity: 0.5 }));
+            new THREE.LineBasicMaterial({ color: LINE_COLORS[bl.lineId] ?? 0x888888, transparent: true, opacity: 0.85 }));
         line.frustumCulled = false;
         cohortBusGroup.add(line);
     }
@@ -395,6 +499,8 @@ function clearStreamSprites() {
     disposeCohortBus();
     cohortGround = cohortSky = cohortLines = null;
     _cohort = null; _cohortActive = false; _cohortSource = null; _cohortDraw = null;
+    if (case8Points) { scene?.remove(case8Points); case8Points.geometry.dispose(); case8Points.material.map?.dispose?.(); case8Points.material.dispose(); case8Points = null; }
+    _case8Cohort = null; _case8Active = false; _case8Source = null; _case8Draw = null; _case8TripIds = new Set();
 }
 
 function clearPassengers() {
@@ -956,6 +1062,10 @@ export function init(canvas, config) {
             for (const g of streamGlows) g.visible = false;
         }
 
+        // Cas 8 : billes au sol (temps-sim) + clignotement par itinéraire.
+        if (_case8Active && _case8Cohort) renderCase8Frame(now);
+        else if (case8Points) case8Points.visible = false;
+
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N
         const realTime = now / 1000;
         for (const { handle, urgencyFn } of animatedFlags) {
@@ -1078,19 +1188,22 @@ function drawFrame(frame, routes) {
     if (!_cohortActive) for (const vehicle of frame.vehicles) {
         const shape = shapeByLine[vehicle.line_id];
         if (!shape) continue;
+        // Cas 8 : seulement les autobus UTILES aux trajets de la cohorte, et
+        // seulement leur forme au sol (pas de tracé p50 espace-temps).
+        if (_case8Active && !_case8TripIds.has(vehicle.vehicle_id)) continue;
         const color = LINE_COLORS[vehicle.line_id] ?? 0x888888;
         const traj  = vehicle.trajectory;
         const style = vehicleStyle(vehicle.vehicle_id);
 
         // Densification : insère les sommets de shape entre chaque pas de 60 s pour que
         // les lignes 3D suivent les virages de la route. Inutile si rien n'est dessiné.
-        const drawBand = showUncertainty && style.bandOp > 0.01;
-        const dtraj = (showP50 || drawBand)
+        const drawBand = showUncertainty && style.bandOp > 0.01 && !_case8Active;
+        const dtraj = ((showP50 && !_case8Active) || drawBand)
             ? densifyTrajFull(traj, shapeCumulativeDist(shape))
             : null;
 
         // Trajectoire p50 (dans timeGroup, Y absolu)
-        if (showP50 && dtraj.length >= 2) {
+        if (showP50 && !_case8Active && dtraj.length >= 2) {
             const p50pts = dtraj.map(pt => {
                 const ll = progressToLatLon(pt.p50, shape);
                 return worldPos(ll.lat, ll.lon, pt.t);

@@ -376,3 +376,31 @@ en pause il est fixe. Chaque arrêt en mode A = une cohorte à jour pour ce lieu
 **Reste à concevoir** : la sélection finale du parcours à partir de ce que
 l'utilisateur voit ; et (raffinement) la cohorte construite en cours de ride part
 de l'arrêt d'embarquement du bus courant, pas de la position exacte du voyageur.
+
+## 18. Cas 8 — carte animée (fusion « vagues » + « autobus », 2026-07-11)
+
+Nouveau cas (le Cas 7 reste tel quel). Décisions du porteur (voir plan) :
+- **Fusion, une seule horloge (temps-sim)** : Play fait rouler les **autobus utiles
+  en forme sur la carte** (icônes `makeBusIcon` filtrées par `vehicle_id ∈ tripIds`
+  de la cohorte) et voyager les **1000 bonhommes au sol** ; pause fige tout.
+  Réutilise l'interaction A/B et le panneau du Cas 7. **Pas d'espace-temps** (pas
+  de rails, pas de billes qui montent) : vue carte.
+- **Regroupement par ITINÉRAIRE + clignotement synchronisé** : chaque bille cycle
+  les couleurs de son itinéraire (0,5 s/leg ; bus→couleur ligne, longue marche→gris,
+  longue attente→noir, arrivée→blanc). Toutes les billes d'un même itinéraire
+  pulsent en phase (index de clignotement partagé). Le comptage par couleur (qui
+  n'a plus de sens en clignotant) est remplacé par le regroupement par itinéraire.
+- Cohorte **reconstruite aux points de décision** (mise en pause en mode A) et
+  **relancée** quand `nowAbs` dépasse l'arrivée max (tout le monde arrivé).
+
+Moteur (`getCohort`) : renvoie `tripIds`, `itineraries` (map itinId → legs
+{kind, lineId, durationS}) et un `itinId` par agent — reste Three.js-free.
+Rendu (`renderer.js`) : chemin Cas 8 séparé (Points au sol + icônes bus filtrées),
+`setCase8Active/Source`. `index.html` : option Cas 8, `loadChoiceCase8`, câblage.
+
+**Vérifié** : 167 billes actives voyageant, 10 bus utiles, clignotement qui cycle
+(orange→noir→lime observés) ; Play + arrêts A/B ; non-régression Cas 7.
+
+**Points ouverts** : densité — 167 billes réparties sur tout le réseau en temps-sim
+sont locales-clairsemées (vs la vague concentrée du Cas 7) ; augmenter le nombre
+dessiné si besoin. Densité de clignotement à juger sur GPU.

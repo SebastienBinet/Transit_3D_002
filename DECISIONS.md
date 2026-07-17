@@ -344,6 +344,17 @@ lignes dans le repère des points-ciel). Ce sont les « rails » que l'essaim su
 visibles en modes espace-temps / les-deux (en « au sol », le p50 se projette sur
 le tracé déjà affiché → masqués). Case `#cohort-busp50`.
 
+**Étalement robuste en cours de trajet.** L'étalement des quantiles s'ancre sur le
+**premier événement FUTUR** de la colonne (le *départ* si on attend encore le bus,
+l'*arrivée* si on est **déjà à bord**) + plancher **σ ≥ 45 s**. Sinon, une cohorte
+reconstruite à bord (`hop[0].dep` dans le passé → `σ(0) = 0`) s'effondrait en gros
+tas qui se déplaçaient au lieu d'être étalés (test de non-régression `test_cohort.mjs`).
+
+**Sélecteur Fenêtres/Fourche.** Le sélecteur de mode viz n'a de sens qu'aux cas 1/2
+(récit) : il est **masqué ailleurs** (dont Cas 7/8), et `init()` (`renderer.js`)
+dispose désormais **tout mode viz résiduel** → plus de fenêtres/fourche parasites
+d'un cas à l'autre.
+
 **Coûts / limites.** `getCohort` appelle le Dijkstra (choix + reroutes) : un
 **hitch ~1 s** à la reconstruction (entrée du mode, mise en pause). Étalement
 borné à σ≤300 s.
@@ -372,6 +383,12 @@ la position/temps courant → « les probabilités si je décide *ici, maintenan
 et se cache en lecture (on suit le voyageur ; la flotte réapparaît). Elle ne peut
 donc plus **dériver** : en lecture le temps-sim avance mais la cohorte est cachée ;
 en pause il est fixe. Chaque arrêt en mode A = une cohorte à jour pour ce lieu.
+
+**Repère de recommandation.** Quand une décision est requise (`decisionPending`),
+la bande que **Play prendrait par défaut** est marquée d'un **★** dans l'étiquette
++ un **cadre vert tireté** dans le panneau (distinct du cadre jaune plein de la
+colonne *engagée*). Ne s'affiche qu'aux points de décision. Impl. :
+`choice-panel.js`, `recColId = engine.recommendedId(tAbs)` calculé dans `drawBands`.
 
 **Reste à concevoir** : la sélection finale du parcours à partir de ce que
 l'utilisateur voit ; et (raffinement) la cohorte construite en cours de ride part

@@ -155,6 +155,14 @@ let case8Points = null;
 // Représentation : 'disc' (disques clignotants) | 'baton' (bâtonnets à segments).
 let _case8Repr = 'disc';
 let _batonLenMul = 1, _batonWidMul = 1;
+// Mise en scène par CHOIX : sinon, en bâtonnets, les meilleurs choix (plus
+// courts) sont les moins visibles. On n'affiche qu'un choix à la fois : soit
+// le choix survolé/engagé dans le panneau (_case8Focus), soit — à défaut — en
+// cyclant les choix 0,5 s chacun (_case8Cycle). null actif = tout afficher.
+const CHOICE_STEP_S = 0.5;
+let _case8Focus = null;        // choiceId épinglé (survol/engagé) | null
+let _case8Cycle = true;        // cyclage auto quand rien n'est épinglé
+let _case8ChoiceIds = [];      // choiceIds distincts, dans l'ordre du panneau
 const BATON_LEN_BASE = 0.28;   // demi-longueur (m) par seconde de trajet, × slider
 const BATON_W_BASE   = 22;     // demi-largeur (m) de base, × slider
 let case8Baton = null;         // THREE.Mesh (quads vertex-colorés) — mode bâtonnets
@@ -183,6 +191,18 @@ export function setCase8Repr(mode) {
 export function setCase8Baton({ lenMul, widMul } = {}) {
     if (lenMul != null) _batonLenMul = Math.max(0.05, lenMul);
     if (widMul != null) _batonWidMul = Math.max(0.05, widMul);
+}
+// Épingle un choix (survol/engagé dans le panneau) ; null → reprend le cyclage.
+export function setCase8Focus(choiceId) { _case8Focus = choiceId ?? null; }
+export function setCase8Cycle(on) { _case8Cycle = !!on; }
+
+// Choix à MONTRER cette frame : l'épinglé s'il existe dans la cohorte courante,
+// sinon le choix cyclé (0,5 s chacun), sinon null = tous les choix affichés.
+function activeCase8Choice(now) {
+    if (_case8Focus != null && _case8ChoiceIds.includes(_case8Focus)) return _case8Focus;
+    if (!_case8Cycle || _case8ChoiceIds.length <= 1) return null;
+    const k = Math.floor((now / 1000) / CHOICE_STEP_S) % _case8ChoiceIds.length;
+    return _case8ChoiceIds[k];
 }
 // Densité dessinée (slider Cas 8) : nombre de figures sous-échantillonnées du
 // 1000. Rebuild de la couche cohorte/Cas 8 active.
@@ -242,6 +262,9 @@ function applyCase8(cohort) {
     _case8Cohort = cohort;
     if (!cohort) { if (case8Points) case8Points.visible = false; if (case8Baton) case8Baton.visible = false; return; }
     _case8TripIds = new Set(cohort.tripIds);
+    // choiceIds distincts dans l'ordre du panneau (agents ordonnés par choiceIdx,
+    // lui-même trié meilleur-en-tête) → ordre de cyclage stable et lisible.
+    _case8ChoiceIds = [...new Set(cohort.agents.map(a => a.choiceId))];
     _case8BlinkCols = {};
     const segCache = {};
     for (const [id, it] of Object.entries(cohort.itineraries)) {
@@ -305,13 +328,14 @@ function renderCase8Frame(now) {
         const fresh = _case8Source(nowAbs);
         if (fresh) applyCase8(fresh);
     }
-    if (_case8Repr === 'baton') renderCase8Baton(nowAbs);
-    else                        renderCase8Disc(now, nowAbs);
+    const active = activeCase8Choice(now);   // choix à montrer (ou null = tous)
+    if (_case8Repr === 'baton') renderCase8Baton(nowAbs, active);
+    else                        renderCase8Disc(now, nowAbs, active);
 }
 
 // Disques clignotants : couleur = leg courant (0.5 s/leg) ; un pas caché en fin
 // de cycle (bille absente 0.5 s) marque le redémarrage.
-function renderCase8Disc(now, nowAbs) {
+function renderCase8Disc(now, nowAbs, active) {
     if (case8Baton) case8Baton.visible = false;
     if (!case8Points) makeCase8Points();
     const draw = _case8Draw, n = draw.length;
@@ -323,7 +347,8 @@ function renderCase8Disc(now, nowAbs) {
         const list = _case8BlinkCols[a.itinId] ?? [null];
         const rgb = list[blinkStep % list.length];
         const tq = nowAbs - a.delayS;
-        const pos = (rgb && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
+        const shown = (active == null || a.choiceId === active);   // mise en scène par choix
+        const pos = (shown && rgb && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
         if (pos) {
             const w = geoPos(pos.lat, pos.lon);
             _case8Pos[3 * i] = w.x + d.jx; _case8Pos[3 * i + 1] = FEET_Y; _case8Pos[3 * i + 2] = w.z + d.jz;
@@ -340,7 +365,7 @@ function renderCase8Disc(now, nowAbs) {
 // Bâtonnets : chaque bille = un ruban perpendiculaire à la direction du tracé au
 // point courant ; ses segments (couleur = leg, longueur ∝ durée) donnent tout
 // l'itinéraire d'un coup d'œil, sans clignotement.
-function renderCase8Baton(nowAbs) {
+function renderCase8Baton(nowAbs, active) {
     if (case8Points) case8Points.visible = false;
     if (!case8Baton || !_batonPos) return;
     const draw = _case8Draw;
@@ -354,7 +379,8 @@ function renderCase8Baton(nowAbs) {
     for (const d of draw) {
         const a = d.a;
         const tq = nowAbs - a.delayS;
-        const pos = (d.segs.length && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
+        const shown = (active == null || a.choiceId === active);   // mise en scène par choix
+        const pos = (shown && d.segs.length && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
         if (!pos) {                                 // escamoter : tous les sommets hors champ
             for (let v = d.vertOff; v < d.vertOff + d.vertLen; v++) put(v, 0, OFF, 0);
             continue;
@@ -656,6 +682,7 @@ function clearStreamSprites() {
     if (case8Baton) { scene?.remove(case8Baton); case8Baton.geometry.dispose(); case8Baton.material.dispose(); case8Baton = null; }
     _case8Cohort = null; _case8Active = false; _case8Source = null; _case8Draw = null; _case8TripIds = new Set();
     _batonPos = null; _batonVerts = 0;
+    _case8Focus = null; _case8ChoiceIds = [];
 }
 
 function clearPassengers() {

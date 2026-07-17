@@ -465,3 +465,30 @@ Rendu (`renderer.js`) : `setCase8Repr`, `setCase8Baton`, `setCohortDrawCount` ;
 vendé depuis npm) — Cas 8 charge, bascule disque↔bâtonnets, sliders densité
 (180→1800) / longueur / largeur, Play, **aucune erreur JS**. Lisibilité visuelle
 (dispersion, bâtonnets, longueurs) à juger sur GPU par le porteur.
+
+### 18.2 Cas 8 — mise en scène par choix (cyclage + focus au survol, 2026-07-17)
+
+Problème soulevé par le porteur : en bâtonnets, la longueur ∝ durée fait que les
+**meilleurs** choix (les plus courts) sont les **moins visibles** — l'inverse de
+ce qu'on veut mettre en évidence. Correctif : ne montrer **qu'un choix à la fois**.
+
+- **Cyclage des choix** (`_case8Cycle`, défaut activé, case `#case8-cycle`) :
+  à défaut de survol, le rendu affiche un choix 0,5 s (`CHOICE_STEP_S`) puis le
+  suivant, en boucle. Chaque choix a ainsi la même « scène », quelle que soit sa
+  longueur. Ordre = ordre du panneau (agents triés par `choiceIdx`, meilleur en tête).
+- **Focus au survol** (`_case8Focus`) : survoler (ou engager) un choix dans le
+  panneau épingle CE choix au sol ; quitter le survol reprend le cyclage (ou reste
+  sur le choix engagé). Câblé via le `onHighlightChoice` du panneau (déjà émis en
+  Cas 7) → `setCase8Focus(ch?.id ?? null)`.
+- **Même mécanisme pour les DEUX représentations** (disques ET bâtonnets) :
+  `activeCase8Choice(now)` renvoie le choiceId à montrer (épinglé, sinon cyclé,
+  sinon `null` = tout) ; `renderCase8Disc`/`renderCase8Baton` escamotent les billes
+  dont `choiceId` ≠ actif. Décocher « Alterner les choix » revient à tout afficher
+  (comportement d'origine), le focus au survol restant actif.
+
+Le choix épinglé qui disparaît de la cohorte (relance / nouveau point de décision)
+retombe proprement sur le cyclage (garde `_case8ChoiceIds.includes`).
+
+**Vérifié** : 101 tests L3 verts ; smoke headless — Play avec cyclage actif, survol
+d'une colonne du panneau (→ focus), bascule de la case, disque↔bâtonnets :
+**aucune erreur JS**. Rythme et lisibilité du cyclage à juger sur GPU.

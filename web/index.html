@@ -175,6 +175,10 @@
     <div>Densité <span id="case8-draw-val">180</span> billes<br>
       <input id="case8-draw" type="range" min="0" max="100" step="1" value="50" style="width:130px;">
     </div>
+    <div><label style="cursor:pointer; user-select:none;">
+      <input type="checkbox" id="case8-cycle" checked style="cursor:pointer; vertical-align:middle;">
+      Alterner les choix (0,5 s)
+    </label></div>
     <div id="case8-baton-rows" style="display:none;">
       <div>Longueur ×<span id="case8-len-val">1.0</span><br>
         <input id="case8-len" type="range" min="0.2" max="5" step="0.1" value="1" style="width:130px;">
@@ -225,7 +229,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50, setCase8Active, setCase8Source, setCase8Repr, setCase8Baton, setCohortDrawCount } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50, setCase8Active, setCase8Source, setCase8Repr, setCase8Baton, setCohortDrawCount, setCase8Focus, setCase8Cycle } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -483,17 +487,20 @@
         container: document.getElementById('legend'),
         engine: choiceEngine,
         t0,
-        // pas de surlignage 3D espace-temps en Cas 8
+        // Survol/engagement d'un choix → mise en scène de CE choix au sol
+        // (bâtonnets ou disques). Sans survol, le rendu cycle les choix.
+        onHighlightChoice: ch => setCase8Focus(ch ? ch.id : null),
       });
 
       // Cohorte au sol en temps-sim (mêmes bonhommes que le Cas 7, mais voyagent
       // avec Play). Source = buildCohort (reconstruite aux décisions / à la relance).
       cohortCache = null;
       isCase8 = true;
-      // Représentation + densité + tailles des bâtonnets depuis les curseurs.
+      // Représentation + densité + tailles des bâtonnets + cyclage depuis les curseurs.
       setCohortDrawCount(drawFromSlider(Number(document.getElementById('case8-draw').value)));
       setCase8Baton({ lenMul: Number(document.getElementById('case8-len').value),
                       widMul: Number(document.getElementById('case8-wid').value) });
+      setCase8Cycle(document.getElementById('case8-cycle').checked);
       setCase8Repr(document.getElementById('case8-repr').value);
       setCase8Source(buildCohort);
       setCase8Active(true);
@@ -876,6 +883,10 @@
       const nDraw = drawFromSlider(Number(e.target.value));
       document.getElementById('case8-draw-val').textContent = nDraw;
       setCohortDrawCount(nDraw);
+      update();
+    };
+    document.getElementById('case8-cycle').onchange = e => {
+      setCase8Cycle(e.target.checked);
       update();
     };
     document.getElementById('case8-len').oninput = e => {

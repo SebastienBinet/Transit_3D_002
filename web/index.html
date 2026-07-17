@@ -165,6 +165,25 @@
       <input id="stream-speed" type="range" min="10" max="300" step="10" value="100" style="width:130px;">
     </div>
     </div>
+    <div id="case8-only" style="display:none;">
+    <div>Représentation
+      <select id="case8-repr" style="font-size:10px; padding:1px 3px;">
+        <option value="disc" selected>Disques (clignotants)</option>
+        <option value="baton">Bâtonnets (segments)</option>
+      </select>
+    </div>
+    <div>Densité <span id="case8-draw-val">180</span> billes<br>
+      <input id="case8-draw" type="range" min="0" max="100" step="1" value="50" style="width:130px;">
+    </div>
+    <div id="case8-baton-rows" style="display:none;">
+      <div>Longueur ×<span id="case8-len-val">1.0</span><br>
+        <input id="case8-len" type="range" min="0.2" max="5" step="0.1" value="1" style="width:130px;">
+      </div>
+      <div>Largeur ×<span id="case8-wid-val">1.0</span><br>
+        <input id="case8-wid" type="range" min="0.2" max="5" step="0.1" value="1" style="width:130px;">
+      </div>
+    </div>
+    </div>
   </div>
 
   <div id="hud">
@@ -206,7 +225,7 @@
   </div>
 
   <script type="module">
-    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50, setCase8Active, setCase8Source } from './js/renderer.js';
+    import { init, renderFrame, lastDrawMs, setVizMode, updateSimTime, setShowUncertainty, setShowP50, getAzimuthalAngle, initPassengers, setPassengerSource, setPassengerT0, setJourneyHighlight, setHighlightStream, setStreamParams, setCohortActive, setCohortParams, setCohortSource, setCohortBusP50, setCase8Active, setCase8Source, setCase8Repr, setCase8Baton, setCohortDrawCount } from './js/renderer.js';
     import { createPlayer, loadScenario } from './js/player.js';
     import { createScheduleModel, loadCircuits } from './js/scenario-model.js';
     import { createJourneyModel } from './js/journey-model.js';
@@ -239,6 +258,9 @@
     function animModeIsCohort() {
       return document.getElementById('anim-mode').value === 'cohorte';
     }
+    // Curseur de densité (Cas 8) → nb de billes dessinées, échelle LOG centrée sur
+    // 180 : s=0→~2, s=50→180, s=100→18000 (180 × 100^((s-50)/50)).
+    function drawFromSlider(s) { return Math.round(1.8 * Math.pow(10000, s / 100)); }
     function playMode() { return document.getElementById('play-mode')?.value || 'A'; }
 
     // Play/Pause centralisés (Cas 7) : en lecture on suit le voyageur (cohorte
@@ -310,6 +332,7 @@
       document.getElementById('anim-mode').value = 'survol';
       document.getElementById('stream-spacing-row').style.display = '';
       document.getElementById('case7-only').style.display = '';
+      document.getElementById('case8-only').style.display = 'none';
       document.getElementById('stream-controls').style.display = 'none';
     }
 
@@ -400,6 +423,7 @@
       document.getElementById('anim-mode').value = 'survol';
       document.getElementById('stream-spacing-row').style.display = '';
       document.getElementById('case7-only').style.display = '';
+      document.getElementById('case8-only').style.display = 'none';
       document.getElementById('stream-controls').style.display = '';
 
       player = model;
@@ -466,11 +490,20 @@
       // avec Play). Source = buildCohort (reconstruite aux décisions / à la relance).
       cohortCache = null;
       isCase8 = true;
+      // Représentation + densité + tailles des bâtonnets depuis les curseurs.
+      setCohortDrawCount(drawFromSlider(Number(document.getElementById('case8-draw').value)));
+      setCase8Baton({ lenMul: Number(document.getElementById('case8-len').value),
+                      widMul: Number(document.getElementById('case8-wid').value) });
+      setCase8Repr(document.getElementById('case8-repr').value);
       setCase8Source(buildCohort);
       setCase8Active(true);
 
-      // Contrôles : garder « Lecture A/B », masquer les réglages espace-temps.
+      // Contrôles : garder « Lecture A/B », masquer les réglages espace-temps,
+      // montrer les réglages propres au Cas 8 (représentation / densité).
       document.getElementById('case7-only').style.display = 'none';
+      document.getElementById('case8-only').style.display = '';
+      document.getElementById('case8-baton-rows').style.display =
+        document.getElementById('case8-repr').value === 'baton' ? '' : 'none';
       document.getElementById('stream-controls').style.display = '';
 
       player = model;
@@ -832,6 +865,28 @@
       document.getElementById('stream-speed-val').textContent = e.target.value;
       setStreamParams({ speedMul: Number(e.target.value) });
       setCohortParams({ speedMul: Number(e.target.value) });
+    };
+    // ── Cas 8 : représentation / densité / tailles des bâtonnets ──────────────
+    document.getElementById('case8-repr').onchange = e => {
+      document.getElementById('case8-baton-rows').style.display = e.target.value === 'baton' ? '' : 'none';
+      setCase8Repr(e.target.value);
+      update();
+    };
+    document.getElementById('case8-draw').oninput = e => {
+      const nDraw = drawFromSlider(Number(e.target.value));
+      document.getElementById('case8-draw-val').textContent = nDraw;
+      setCohortDrawCount(nDraw);
+      update();
+    };
+    document.getElementById('case8-len').oninput = e => {
+      document.getElementById('case8-len-val').textContent = Number(e.target.value).toFixed(1);
+      setCase8Baton({ lenMul: Number(e.target.value) });
+      update();
+    };
+    document.getElementById('case8-wid').oninput = e => {
+      document.getElementById('case8-wid-val').textContent = Number(e.target.value).toFixed(1);
+      setCase8Baton({ widMul: Number(e.target.value) });
+      update();
     };
     document.getElementById('speed-select').onchange = e =>
       player?.setSpeed(Number(e.target.value));

@@ -117,7 +117,8 @@ export function setStreamParams({ mode, spacingS, speedMul } = {}) {
 // groupé (fiable) ; une traînée diffuse et étalée = correspondances ratées,
 // arrivées dispersées (risqué). Les retardataires reroutés gardent leur couleur
 // de 1er bus : c'est la dispersion, pas une teinte à part, qui dit le risque.
-const COHORT_DRAW = 180;       // bonhommes DESSINÉS (sous-échantillon lisible du 1000)
+const COHORT_DRAW = 180;       // bonhommes DESSINÉS par défaut (sous-échantillon lisible du 1000)
+let _cohortDrawN = COHORT_DRAW; // pilotable par le slider « densité » (Cas 8)
 const COHORT_JITTER = 130;     // dispersion locale (m) — sépare une foule en nuage lisible
 const COHORT_CELL = 220;       // taille de cellule pour regrouper les halos de densité
 let _cohort = null;            // { agents, baseStartS, waveEndS } | null
@@ -142,15 +143,22 @@ let _discTex = null, _cohortGlowTex = null;
 const BLINK_STEP_S = 0.5;      // durée d'affichage d'une couleur de leg
 const WALK_LONG_S = 90;        // marche « longue » → gris dans le clignotement
 const WAIT_LONG_S = 90;        // attente « longue » → noir
-const C8_GREY = [0.53, 0.53, 0.53], C8_BLACK = [0.07, 0.07, 0.07], C8_WHITE = [1, 1, 1];
+const C8_GREY = [0.53, 0.53, 0.53], C8_BLACK = [0.07, 0.07, 0.07];
 let _case8Active = false;
 let _case8Source = null;       // (nowAbs) => cohort|null
 let _case8Cohort = null;
 let _case8TripIds = new Set(); // passages utiles (filtre des icônes de bus)
-let _case8Draw = null;         // sous-échantillon [{a, jx, jz}]
+let _case8Draw = null;         // sous-échantillon [{a, jx, jz, segs, vertOff, vertLen}]
 let _case8Pos = null, _case8Col = null;
-let _case8BlinkCols = null;    // itinId → liste de couleurs [r,g,b] (clignotement)
+let _case8BlinkCols = null;    // itinId → liste de couleurs [r,g,b|null] (clignotement)
 let case8Points = null;
+// Représentation : 'disc' (disques clignotants) | 'baton' (bâtonnets à segments).
+let _case8Repr = 'disc';
+let _batonLenMul = 1, _batonWidMul = 1;
+const BATON_LEN_BASE = 0.28;   // demi-longueur (m) par seconde de trajet, × slider
+const BATON_W_BASE   = 22;     // demi-largeur (m) de base, × slider
+let case8Baton = null;         // THREE.Mesh (quads vertex-colorés) — mode bâtonnets
+let _batonPos = null, _batonVerts = 0;
 
 export function setCase8Source(fn) { _case8Source = fn; }
 export function setCase8Active(on) {
@@ -158,13 +166,36 @@ export function setCase8Active(on) {
     if (stopSpheresGroup) stopSpheresGroup.visible = !on;   // pastilles masquées en Cas 8
     if (on) {
         if (_case8Source) applyCase8(_case8Source(_t0ForPassengers + currentSimTime));
-    } else if (case8Points) {
-        case8Points.visible = false;
+    } else {
+        if (case8Points) case8Points.visible = false;
+        if (case8Baton)  case8Baton.visible = false;
     }
+}
+// Représentation Cas 8 : 'disc' (disques clignotants) ou 'baton' (bâtonnets à
+// segments). On reconstruit les tampons (la géométrie diffère) et on cache
+// l'autre couche.
+export function setCase8Repr(mode) {
+    _case8Repr = (mode === 'baton') ? 'baton' : 'disc';
+    if (case8Points) case8Points.visible = false;
+    if (case8Baton)  case8Baton.visible = false;
+    if (_case8Active && _case8Cohort) applyCase8(_case8Cohort);
+}
+export function setCase8Baton({ lenMul, widMul } = {}) {
+    if (lenMul != null) _batonLenMul = Math.max(0.05, lenMul);
+    if (widMul != null) _batonWidMul = Math.max(0.05, widMul);
+}
+// Densité dessinée (slider Cas 8) : nombre de figures sous-échantillonnées du
+// 1000. Rebuild de la couche cohorte/Cas 8 active.
+export function setCohortDrawCount(n) {
+    _cohortDrawN = Math.max(1, Math.round(n));
+    if (_case8Active && _case8Cohort) applyCase8(_case8Cohort);
+    else if (_cohortActive && _cohort) applyCohort(_cohort);
 }
 
 // Séquence de couleurs d'un itinéraire pour le clignotement : bus → couleur de
-// ligne ; longue marche → gris ; longue attente → noir ; puis blanc (arrivée).
+// ligne ; longue marche → gris ; longue attente → noir ; puis un pas CACHÉ
+// (null) : la bille disparaît 0.5 s en fin de cycle, ce qui marque nettement le
+// redémarrage (le blanc était trop peu perceptible).
 function itinBlinkColors(legs) {
     const cols = [];
     for (const l of legs) {
@@ -172,8 +203,24 @@ function itinBlinkColors(legs) {
         else if (l.kind === 'walk' && l.durationS >= WALK_LONG_S) cols.push(C8_GREY);
         else if (l.kind === 'wait' && l.durationS >= WAIT_LONG_S) cols.push(C8_BLACK);
     }
-    cols.push(C8_WHITE);   // arrivée
+    cols.push(null);   // trou transparent = fin de cycle / arrivée
     return cols;
+}
+
+// Segments d'un bâtonnet : TOUS les legs (pas seulement les longs) avec leur
+// couleur — bus = couleur de ligne, marche = gris, attente = noir — et leur
+// durée. Sert au tracé spatial (longueur de segment ∝ durée) au lieu du
+// clignotement temporel.
+function itinSegments(legs) {
+    const segs = [];
+    for (const l of legs) {
+        let rgb;
+        if (l.kind === 'bus') rgb = hexToRgb(LINE_COLORS[l.lineId] ?? 0x888888);
+        else if (l.kind === 'walk') rgb = C8_GREY;
+        else rgb = C8_BLACK;   // wait
+        segs.push({ rgb, dur: Math.max(1, l.durationS) });
+    }
+    return segs;
 }
 
 function makeCase8Points() {
@@ -182,25 +229,41 @@ function makeCase8Points() {
     case8Points = new THREE.Points(new THREE.BufferGeometry(), mat);
     case8Points.visible = false; case8Points.frustumCulled = false; scene.add(case8Points);
 }
+function makeCase8Baton() {
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.95, depthWrite: false });
+    case8Baton = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+    case8Baton.visible = false; case8Baton.frustumCulled = false; scene.add(case8Baton);
+}
 
 // (Re)construit les tampons Cas 8 : sous-échantillon (groupé par itinéraire,
-// car les agents sont déjà ordonnés) + jitter + listes de clignotement.
+// car les agents sont déjà ordonnés) + jitter + séquences (clignotement / segments).
 function applyCase8(cohort) {
     _case8Cohort = cohort;
-    if (!cohort) { if (case8Points) case8Points.visible = false; return; }
+    if (!cohort) { if (case8Points) case8Points.visible = false; if (case8Baton) case8Baton.visible = false; return; }
     _case8TripIds = new Set(cohort.tripIds);
     _case8BlinkCols = {};
-    for (const [id, it] of Object.entries(cohort.itineraries)) _case8BlinkCols[id] = itinBlinkColors(it.legs);
+    const segCache = {};
+    for (const [id, it] of Object.entries(cohort.itineraries)) {
+        _case8BlinkCols[id] = itinBlinkColors(it.legs);
+        segCache[id] = itinSegments(it.legs);
+    }
     const agents = cohort.agents;
-    const stride = Math.max(1, Math.round(agents.length / COHORT_DRAW));
+    const stride = Math.max(1, Math.round(agents.length / _cohortDrawN));
     const draw = [];
     for (let i = 0; i < agents.length; i += stride) {
         const k = draw.length;
         const ang = k * 2.399963229728653;
         const rad = COHORT_JITTER * Math.sqrt(((k % 64) + 0.5) / 64);
-        draw.push({ a: agents[i], jx: Math.cos(ang) * rad, jz: Math.sin(ang) * rad });
+        draw.push({ a: agents[i], jx: Math.cos(ang) * rad, jz: Math.sin(ang) * rad,
+                    segs: segCache[agents[i].itinId] ?? [] });
     }
     _case8Draw = draw;
+    if (_case8Repr === 'baton') buildCase8Baton(draw);
+    else                       buildCase8Disc(draw);
+}
+
+function buildCase8Disc(draw) {
     const n = draw.length;
     _case8Pos = new Float32Array(n * 3);
     _case8Col = new Float32Array(n * 3);
@@ -209,34 +272,124 @@ function applyCase8(cohort) {
     case8Points.geometry.setAttribute('color', new THREE.BufferAttribute(_case8Col, 3));
 }
 
+// Bâtonnet = petit ruban perpendiculaire au tracé, fait de segments (2 triangles
+// = 6 sommets chacun) colorés par leg, répétés symétriquement de part et d'autre
+// du centre. Couleurs statiques (posées ici) ; positions calculées par frame.
+function buildCase8Baton(draw) {
+    let total = 0;
+    for (const d of draw) { d.vertOff = total; d.vertLen = d.segs.length * 2 * 6; total += d.vertLen; }
+    _batonVerts = total;
+    _batonPos = new Float32Array(Math.max(1, total) * 3);
+    const col = new Float32Array(Math.max(1, total) * 3);
+    for (const d of draw) {
+        let v = d.vertOff;
+        for (let half = 0; half < 2; half++) {
+            for (const s of d.segs) {
+                const [r, g, b] = s.rgb;
+                for (let q = 0; q < 6; q++) { col[3 * v] = r; col[3 * v + 1] = g; col[3 * v + 2] = b; v++; }
+            }
+        }
+    }
+    if (!case8Baton) makeCase8Baton();
+    case8Baton.geometry.setAttribute('position', new THREE.BufferAttribute(_batonPos, 3));
+    case8Baton.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    case8Baton.geometry.setDrawRange(0, total);
+}
+
 // Une frame Cas 8 (RAF). Position = temps-sim (les bus roulent en parallèle via
-// renderFrame) ; couleur = clignotement temps-machine synchronisé par itinéraire.
+// renderFrame). L'incertitude (delayS) échelonne les billes LE LONG du tracé
+// (sinon elles s'empilent en tas ronds au même point).
 function renderCase8Frame(now) {
     const nowAbs = _t0ForPassengers + currentSimTime;
     if (nowAbs > _case8Cohort.waveEndS && _case8Source) {   // tout arrivé → relance au « maintenant »
         const fresh = _case8Source(nowAbs);
         if (fresh) applyCase8(fresh);
     }
+    if (_case8Repr === 'baton') renderCase8Baton(nowAbs);
+    else                        renderCase8Disc(now, nowAbs);
+}
+
+// Disques clignotants : couleur = leg courant (0.5 s/leg) ; un pas caché en fin
+// de cycle (bille absente 0.5 s) marque le redémarrage.
+function renderCase8Disc(now, nowAbs) {
+    if (case8Baton) case8Baton.visible = false;
+    if (!case8Points) makeCase8Points();
     const draw = _case8Draw, n = draw.length;
     const FEET_Y = 118 * (150 / 180);
     const blinkStep = Math.floor((now / 1000) / BLINK_STEP_S);
     const OFF = -1e7;
     for (let i = 0; i < n; i++) {
         const d = draw[i], a = d.a;
-        const pos = a.path.sampleAbs(nowAbs);
+        const list = _case8BlinkCols[a.itinId] ?? [null];
+        const rgb = list[blinkStep % list.length];
+        const tq = nowAbs - a.delayS;
+        const pos = (rgb && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
         if (pos) {
             const w = geoPos(pos.lat, pos.lon);
             _case8Pos[3 * i] = w.x + d.jx; _case8Pos[3 * i + 1] = FEET_Y; _case8Pos[3 * i + 2] = w.z + d.jz;
-        } else {
+            _case8Col[3 * i] = rgb[0]; _case8Col[3 * i + 1] = rgb[1]; _case8Col[3 * i + 2] = rgb[2];
+        } else {                                       // pas caché OU hors trajet → escamotée
             _case8Pos[3 * i] = 0; _case8Pos[3 * i + 1] = OFF; _case8Pos[3 * i + 2] = 0;
         }
-        const list = _case8BlinkCols[a.itinId] ?? [C8_WHITE];
-        const rgb = list[blinkStep % list.length];
-        _case8Col[3 * i] = rgb[0]; _case8Col[3 * i + 1] = rgb[1]; _case8Col[3 * i + 2] = rgb[2];
     }
     case8Points.geometry.attributes.position.needsUpdate = true;
     case8Points.geometry.attributes.color.needsUpdate = true;
     case8Points.visible = true;
+}
+
+// Bâtonnets : chaque bille = un ruban perpendiculaire à la direction du tracé au
+// point courant ; ses segments (couleur = leg, longueur ∝ durée) donnent tout
+// l'itinéraire d'un coup d'œil, sans clignotement.
+function renderCase8Baton(nowAbs) {
+    if (case8Points) case8Points.visible = false;
+    if (!case8Baton || !_batonPos) return;
+    const draw = _case8Draw;
+    const FEET_Y = 118 * (150 / 180) + 2;         // au-dessus des disques / de la carte
+    const OFF = -1e7;
+    const hw = BATON_W_BASE * _batonWidMul;        // demi-largeur (sens du tracé)
+    const lenScale = BATON_LEN_BASE * _batonLenMul;
+    const DT = 3;                                   // s, pour estimer la tangente
+    const P = _batonPos;
+    const put = (v, x, y, z) => { P[3 * v] = x; P[3 * v + 1] = y; P[3 * v + 2] = z; };
+    for (const d of draw) {
+        const a = d.a;
+        const tq = nowAbs - a.delayS;
+        const pos = (d.segs.length && tq >= a.path.startS && tq <= a.path.endS) ? a.path.sampleAbs(tq) : null;
+        if (!pos) {                                 // escamoter : tous les sommets hors champ
+            for (let v = d.vertOff; v < d.vertOff + d.vertLen; v++) put(v, 0, OFF, 0);
+            continue;
+        }
+        const c = geoPos(pos.lat, pos.lon);
+        // tangente : voisin dans le domaine (avant si possible, sinon arrière)
+        let ta = tq + DT, back = false;
+        if (ta > a.path.endS) { ta = Math.max(a.path.startS, tq - DT); back = true; }
+        const p2 = a.path.sampleAbs(ta);
+        let tx = 0, tz = 1;
+        if (p2) {
+            const w2 = geoPos(p2.lat, p2.lon);
+            let dx = w2.x - c.x, dz = w2.z - c.z;
+            if (back) { dx = -dx; dz = -dz; }
+            const L = Math.hypot(dx, dz);
+            if (L > 1e-3) { tx = dx / L; tz = dz / L; }
+        }
+        const px = -tz, pz = tx;                    // perpendiculaire dans le plan xz
+        let v = d.vertOff;
+        for (let sign = 1; sign >= -1; sign -= 2) {  // deux moitiés symétriques
+            let r0 = 0;
+            for (const s of d.segs) {
+                const r1 = r0 + s.dur * lenScale;
+                const a0x = c.x + px * r0 * sign - tx * hw, a0z = c.z + pz * r0 * sign - tz * hw;
+                const a1x = c.x + px * r0 * sign + tx * hw, a1z = c.z + pz * r0 * sign + tz * hw;
+                const b0x = c.x + px * r1 * sign - tx * hw, b0z = c.z + pz * r1 * sign - tz * hw;
+                const b1x = c.x + px * r1 * sign + tx * hw, b1z = c.z + pz * r1 * sign + tz * hw;
+                put(v++, a0x, FEET_Y, a0z); put(v++, a1x, FEET_Y, a1z); put(v++, b1x, FEET_Y, b1z);
+                put(v++, a0x, FEET_Y, a0z); put(v++, b1x, FEET_Y, b1z); put(v++, b0x, FEET_Y, b0z);
+                r0 = r1;
+            }
+        }
+    }
+    case8Baton.geometry.attributes.position.needsUpdate = true;
+    case8Baton.visible = true;
 }
 
 export function setCohortSource(fn) { _cohortSource = fn; }
@@ -327,7 +480,7 @@ function applyCohort(cohort) {
     if (!cohort) { if (cohortGround) { cohortGround.visible = cohortSky.visible = cohortLines.visible = false; for (const g of cohortGlows) g.visible = false; } return; }
     if (!cohortGround) makeCohortObjects();
     const agents = cohort.agents;
-    const stride = Math.max(1, Math.round(agents.length / COHORT_DRAW));
+    const stride = Math.max(1, Math.round(agents.length / _cohortDrawN));
     const draw = [];
     for (let i = 0; i < agents.length; i += stride) {
         const k = draw.length;
@@ -500,7 +653,9 @@ function clearStreamSprites() {
     cohortGround = cohortSky = cohortLines = null;
     _cohort = null; _cohortActive = false; _cohortSource = null; _cohortDraw = null;
     if (case8Points) { scene?.remove(case8Points); case8Points.geometry.dispose(); case8Points.material.map?.dispose?.(); case8Points.material.dispose(); case8Points = null; }
+    if (case8Baton) { scene?.remove(case8Baton); case8Baton.geometry.dispose(); case8Baton.material.dispose(); case8Baton = null; }
     _case8Cohort = null; _case8Active = false; _case8Source = null; _case8Draw = null; _case8TripIds = new Set();
+    _batonPos = null; _batonVerts = 0;
 }
 
 function clearPassengers() {
@@ -1064,7 +1219,7 @@ export function init(canvas, config) {
 
         // Cas 8 : billes au sol (temps-sim) + clignotement par itinéraire.
         if (_case8Active && _case8Cohort) renderCase8Frame(now);
-        else if (case8Points) case8Points.visible = false;
+        else { if (case8Points) case8Points.visible = false; if (case8Baton) case8Baton.visible = false; }
 
         // Animation des drapeaux — temps RÉEL (pas sim) pour vitesse indépendante du ×N
         const realTime = now / 1000;

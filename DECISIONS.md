@@ -421,3 +421,47 @@ Rendu (`renderer.js`) : chemin Cas 8 séparé (Points au sol + icônes bus filtr
 **Points ouverts** : densité — 167 billes réparties sur tout le réseau en temps-sim
 sont locales-clairsemées (vs la vague concentrée du Cas 7) ; augmenter le nombre
 dessiné si besoin. Densité de clignotement à juger sur GPU.
+
+### 18.1 Cas 8 — dispersion, bâtonnets, réglages (branche `case-8-viz`, 2026-07-17)
+
+Travail isolé sur une branche dédiée au Cas 8 uniquement.
+
+- **Dispersion le long du tracé (bug corrigé).** Le rendu Cas 8 échantillonnait le
+  trajet à `nowAbs` **sans le `delayS`** de quantile de chaque bille → toutes les
+  billes d'un même itinéraire tombaient au même point → des **tas parfaitement
+  ronds** (dispersés seulement par le jitter en disque doré). Correctif : comme le
+  Cas 7, interroger `tq = nowAbs − a.delayS` avec garde de domaine
+  (`startS ≤ tq ≤ endS`). L'incertitude sur la position du bus échelonne alors les
+  billes le long du tracé.
+- **Clignotement : trou transparent en fin de cycle.** Le pas « blanc = arrivée »
+  se percevait mal comme début de cycle. Remplacé par un **pas caché** (`null` dans
+  la liste de couleurs) : la bille disparaît 0,5 s en fin de cycle, ce qui marque
+  nettement le redémarrage. `itinBlinkColors` pousse `null` au lieu de `C8_WHITE`.
+- **Slider de densité (log, centré sur 180).** `COHORT_DRAW` (nb de figures
+  dessinées) devient pilotable : `_cohortDrawN`, exposé par `setCohortDrawCount`.
+  Curseur `case8-draw` 0..100 → `drawFromSlider(s) = round(1.8 · 10000^(s/100))`
+  soit ~2 (s=0) · **180 (s=50, défaut)** · 18000 (s=100). Rebuild de la couche active.
+- **Représentation « Bâtonnets » (dropdown `case8-repr`).** Alternative aux disques
+  clignotants : chaque bille = un **ruban perpendiculaire au tracé** (tangente
+  estimée à ±3 s), fait de **segments colorés par leg** (bus→couleur ligne,
+  marche→gris, attente→noir), **longueur ∝ durée** du leg, répétés **symétriquement**
+  de part et d'autre du centre. Tout l'itinéraire se lit statiquement, sans
+  clignotement. Géométrie = quads vertex-colorés (`MeshBasicMaterial`, `DoubleSide`,
+  `case8Baton`), positions recalculées par frame, couleurs statiques.
+  - **Unités carte** (pas écran) : choix assumé — avec longueur ∝ durée, la longueur
+    devient une donnée (durée du trajet) qu'une taille constante-écran détruirait ;
+    et c'est plus simple/robuste. Le rapetissement au dézoom est compensé par le
+    slider de longueur. Le constant-écran-dans-le-plan-incliné reste possible plus tard.
+  - Sliders **Longueur ×** (`case8-len`, `BATON_LEN_BASE=0.28 m/s`) et **Largeur ×**
+    (`case8-wid`, `BATON_W_BASE=22 m`), visibles seulement en mode bâtonnets.
+    Les bâtonnets étant fins dans le sens du tracé, deux billes proches se
+    superposent rarement (pas besoin du comptage « 1 Bille = 10 billes »).
+
+Rendu (`renderer.js`) : `setCase8Repr`, `setCase8Baton`, `setCohortDrawCount` ;
+`renderCase8Disc` / `renderCase8Baton` ; `itinSegments`. UI (`index.html`) : bloc
+`#case8-only` (représentation / densité / longueur / largeur).
+
+**Vérifié** : 101 tests L3 verts ; smoke navigateur headless (Chromium + Three
+vendé depuis npm) — Cas 8 charge, bascule disque↔bâtonnets, sliders densité
+(180→1800) / longueur / largeur, Play, **aucune erreur JS**. Lisibilité visuelle
+(dispersion, bâtonnets, longueurs) à juger sur GPU par le porteur.
